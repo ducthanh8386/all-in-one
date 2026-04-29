@@ -1,0 +1,45 @@
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+# Database
+sqlalchemy==2.0.23
+alembic==1.12.1
+asyncpg==0.29.0
+# Redis & Cache
+redis==5.0.1
+# Task Queue
+celery==5.3.4
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.0
+pydantic-settings==2.1.0
+# AI & LLM
+langchain==0.1.1
+langchain-community==0.0.13
+google-generativeai==0.3.0
+sentence-transformers==2.2.2
+# Vector DB
+qdrant-client==1.7.0
+# PDF Processing
+pdfplumber==0.10.3
+# Real-time
+python-socketio==5.10.0
+python-engineio==4.8.0
+# HTTP
+httpx==0.25.2
+requests==2.31.0
+# Rate Limiting
+slowapi==0.1.9
+limits==3.7.0
+# Utils
+pydantic==2.5.0
+pytz==2023.3
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+# Development
+black==23.12.1
+flake8==6.1.0
+isort==5.13.2
