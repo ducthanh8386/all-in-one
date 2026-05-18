@@ -9,7 +9,7 @@ const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8000'
 
 let socket: Socket | null = null
 
-export const initSocket = (): Socket => {
+export const initSocket = (token?: string): Socket => {
   if (socket) return socket
 
   socket = io(SOCKET_URL, {
@@ -17,6 +17,7 @@ export const initSocket = (): Socket => {
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
     reconnectionAttempts: 5,
+    auth: token ? { token } : undefined,
   })
 
   return socket

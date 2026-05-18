@@ -11,6 +11,8 @@ export const metadata: Metadata = {
   description: 'Manage your study, flashcards, schedule, and compete in real-time games',
 }
 
+import { Header } from '@/components/layout/Header'
+
 export default function RootLayout({
   children,
 }: {
@@ -20,7 +22,12 @@ export default function RootLayout({
     <html lang="vi">
       <body>
         <Providers>
-          {children}
+          <div className="min-h-screen bg-slate-50 flex flex-col">
+            <Header />
+            <div className="flex-1">
+              {children}
+            </div>
+          </div>
         </Providers>
       </body>
     </html>

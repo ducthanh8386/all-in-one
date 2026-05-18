@@ -18,6 +18,7 @@ frontend/.next
 frontend/out
 frontend/build
 frontend/.coverage
+frontend/*.tsbuildinfo
 
 # IDE
 .vscode/

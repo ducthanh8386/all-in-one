@@ -17,9 +17,11 @@ interface User {
 interface AuthStore {
   user: User | null
   accessToken: string | null
-  setAuth: (user: User, token: string) => void
+  hasHydrated: boolean
+  setAuth: (user: User | null, token: string) => void
   clearAuth: () => void
   updateQuota: (quota: number) => void
+  setHasHydrated: (hasHydrated: boolean) => void
 }
 
 export const useAuthStore = create<AuthStore>()(
@@ -27,15 +29,20 @@ export const useAuthStore = create<AuthStore>()(
     (set) => ({
       user: null,
       accessToken: null,
+      hasHydrated: false,
       setAuth: (user, token) => set({ user, accessToken: token }),
       clearAuth: () => set({ user: null, accessToken: null }),
       updateQuota: (quota) =>
         set((state) => ({
           user: state.user ? { ...state.user, ai_quota: quota } : null,
         })),
+      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
     }),
     {
       name: 'auth-storage',
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true)
+      },
     }
   )
 )

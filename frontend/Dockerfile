@@ -19,5 +19,5 @@ RUN npm run build
 # Expose port
 EXPOSE 3000
 
-# Run development server
-CMD ["npm", "run", "dev"]
+# Run production server. docker-compose.yml overrides this for local dev.
+CMD ["npm", "run", "start"]

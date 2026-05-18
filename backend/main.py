@@ -1,7 +1,9 @@
 """
 Brain-Sync Backend - FastAPI Application Entry Point
 """
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -11,9 +13,11 @@ import logging
 from app.core.config import settings
 from app.core.redis import close_redis, health_check as redis_health_check
 from app.db.session import close_db, engine
-from app.db.models import Base
 from app.api.v1 import auth, documents, flashcards, schedules, admin
 from app.sockets.game_handlers import setup_socket_handlers
+
+from slowapi.errors import RateLimitExceeded
+from app.core.rate_limit import limiter
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,9 +36,6 @@ sio = socketio.AsyncServer(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Brain-Sync Backend...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created/verified")
     await setup_socket_handlers(sio)
     logger.info("Socket.io handlers configured")
     yield
@@ -43,13 +44,52 @@ async def lifespan(app: FastAPI):
     await close_redis()
     logger.info("Connections closed")
 
-# Create FastAPI app
 app = FastAPI(
     title="Brain-Sync API",
     description="All-in-one Study Workspace",
     version="2.0",
     lifespan=lifespan
 )
+
+# Rate Limiting
+app.state.limiter = limiter
+
+
+def _error_payload(code: str, message: str, details=None) -> dict:
+    return {"error": {"code": code, "message": message, "details": jsonable_encoder(details)}}
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    detail = exc.detail
+    if isinstance(detail, dict) and "error" in detail:
+        payload = detail
+    elif isinstance(detail, dict) and "code" in detail:
+        payload = _error_payload(
+            str(detail.get("code") or "INTERNAL_ERROR"),
+            str(detail.get("message") or "Request failed."),
+            detail.get("details"),
+        )
+    else:
+        code = "UNAUTHORIZED" if exc.status_code == status.HTTP_401_UNAUTHORIZED else "INTERNAL_ERROR"
+        payload = _error_payload(code, str(detail or "Request failed."))
+    return JSONResponse(status_code=exc.status_code, content=payload, headers=exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content=_error_payload("VALIDATION_ERROR", "Input validation failed.", exc.errors()),
+    )
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content=_error_payload("RATE_LIMITED", "Too many requests.", str(exc.detail)),
+    )
 
 # CORS Middleware
 app.add_middleware(
@@ -99,7 +139,7 @@ socket_app = ASGIApp(sio, app)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "main:socket_app",
         host="0.0.0.0",
         port=8000,
         reload=settings.app_env == "development"

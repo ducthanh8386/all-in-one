@@ -1,58 +1,73 @@
-/**
- * Zustand store for game room state
- * TODO: Implement in Phase 5
- */
-
 import { create } from 'zustand'
 
-interface Player {
+export type RoomStatus = 'WAITING' | 'WRITING' | 'VOTING' | 'RESULT' | 'ENDED'
+
+export interface Player {
   id: string
   name: string
   score: number
 }
 
-interface RoomStore {
-  roomId: string | null
+export interface Definition {
+  id: string
+  text: string
+}
+
+export interface VoteBreakdown {
+  voter_user_id: string
+  voted_for_user_id: string
+}
+
+export interface RoomStatePayload {
+  room_id: string
+  status: RoomStatus
+  host_id: string
+  keyword: string
+  round: number
+  max_rounds: number
+  deadline: number | null
   players: Player[]
-  status: 'WAITING' | 'WRITING' | 'VOTING' | 'RESULT' | 'ENDED'
-  keyword: string | null
-  definitions: { id: string; text: string }[]
-  scores: { [key: string]: number }
-  
-  setRoomId: (id: string) => void
-  setStatus: (status: RoomStore['status']) => void
-  addPlayer: (player: Player) => void
-  removePlayer: (id: string) => void
-  setKeyword: (keyword: string) => void
+  definitions: Definition[]
+  scores: Player[]
+  votes_breakdown: VoteBreakdown[]
+  correct_answer_owner: string
+}
+
+interface RoomStore extends RoomStatePayload {
+  myAnswer: string
+  votedFor: string | null
+  setRoomState: (state: RoomStatePayload) => void
+  setMyAnswer: (answer: string) => void
+  setVotedFor: (definitionId: string | null) => void
   clearRoom: () => void
 }
 
-export const useRoomStore = create<RoomStore>((set) => ({
-  roomId: null,
-  players: [],
+const emptyState: RoomStatePayload = {
+  room_id: '',
   status: 'WAITING',
-  keyword: null,
+  host_id: '',
+  keyword: '',
+  round: 0,
+  max_rounds: 3,
+  deadline: null,
+  players: [],
   definitions: [],
-  scores: {},
-  
-  setRoomId: (id) => set({ roomId: id }),
-  setStatus: (status) => set({ status }),
-  addPlayer: (player) =>
-    set((state) => ({
-      players: [...state.players, player],
+  scores: [],
+  votes_breakdown: [],
+  correct_answer_owner: 'AI_BOT',
+}
+
+export const useRoomStore = create<RoomStore>((set) => ({
+  ...emptyState,
+  myAnswer: '',
+  votedFor: null,
+  setRoomState: (state) =>
+    set((current) => ({
+      ...state,
+      myAnswer: state.status === 'WRITING' ? current.myAnswer : '',
+      votedFor: state.status === 'VOTING' ? current.votedFor : null,
     })),
-  removePlayer: (id) =>
-    set((state) => ({
-      players: state.players.filter((p) => p.id !== id),
-    })),
-  setKeyword: (keyword) => set({ keyword }),
-  clearRoom: () =>
-    set({
-      roomId: null,
-      players: [],
-      status: 'WAITING',
-      keyword: null,
-      definitions: [],
-      scores: {},
-    }),
+  setMyAnswer: (answer) => set({ myAnswer: answer }),
+  setVotedFor: (definitionId) => set({ votedFor: definitionId }),
+  clearRoom: () => set({ ...emptyState, myAnswer: '', votedFor: null }),
 }))

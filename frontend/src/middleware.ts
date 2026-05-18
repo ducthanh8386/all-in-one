@@ -1,27 +1,16 @@
+﻿import { NextRequest, NextResponse } from 'next/server'
+
 /**
- * Next.js middleware for route protection
- * TODO: Implement proper auth check in Phase 1
+ * IMPORTANT: Middleware does NOT check authentication
+ * Why? Because refresh_token proves you have a past login,
+ * but NOT that your access_token is valid.
+ * 
+ * Client-side protection via useEffect + /auth/me is the correct approach
+ * for dual-token JWT architecture.
  */
 
-import { NextRequest, NextResponse } from 'next/server'
-
-const publicRoutes = ['/login', '/register']
-const protectedRoutes = ['/dashboard', '/workspace', '/flashcards', '/schedule', '/arena']
-
 export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl
-
-  // Check if route needs protection
-  const isProtectedRoute = protectedRoutes.some((route) =>
-    pathname.startsWith(route)
-  )
-  
-  if (isProtectedRoute) {
-    // TODO: Check for valid token in cookies or localStorage
-    // For now, just allow all requests - proper auth in Phase 1
-    return NextResponse.next()
-  }
-
+  // Just pass through - let client handle auth verification
   return NextResponse.next()
 }
 
