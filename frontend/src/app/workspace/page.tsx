@@ -1,359 +1,260 @@
 'use client'
 
-/**
- * /workspace — Document list + HTML5 Drag & Drop PDF upload.
- * Real-time status update via Socket.io.
- */
-
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useAuthStore } from '@/store/authStore'
-import apiClient from '@/lib/axios'
-import { initSocket } from '@/lib/socket'
+import apiClient, { getApiErrorMessage } from '@/lib/axios'
+import { AppShell } from '@/components/layout/AppShell'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { SectionCard } from '@/components/shared/SectionCard'
+import { GradientButton } from '@/components/shared/GradientButton'
+import { StatusBadge, type DocStatus } from '@/components/shared/StatusBadge'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { LoadingSkeleton } from '@/components/shared/LoadingSkeleton'
+import { FiDownload, FiEdit2, FiEye, FiFileText, FiLayers, FiMessageSquare, FiSearch, FiTarget, FiTrash2, FiUploadCloud } from 'react-icons/fi'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type DocStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
-
-interface Document {
+interface DocumentItem {
   id: number
   title: string
+  original_filename?: string | null
+  file_type?: string | null
+  file_size?: number | null
   status: DocStatus
   created_at: string
   error_message?: string | null
 }
 
-// ─── Status Badge ──────────────────────────────────────────────────────────────
-
-const STATUS_CONFIG: Record<DocStatus, { label: string; cls: string }> = {
-  PENDING: { label: 'Pending', cls: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30' },
-  PROCESSING: { label: 'Processing…', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/30 animate-pulse' },
-  COMPLETED: { label: 'Ready', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
-  FAILED: { label: 'Failed', cls: 'bg-red-500/20 text-red-300 border-red-500/30' },
+function formatBytes(value?: number | null) {
+  if (!value) return 'Unknown size'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
-function StatusBadge({ status }: { status: DocStatus }) {
-  const { label, cls } = STATUS_CONFIG[status] ?? STATUS_CONFIG.FAILED
-  return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${cls}`}>
-      {label}
-    </span>
-  )
-}
-
-// ─── Upload Zone ───────────────────────────────────────────────────────────────
-
-interface UploadZoneProps {
-  onUploadSuccess: (doc: Document) => void
-}
-
-function UploadZone({ onUploadSuccess }: UploadZoneProps) {
-  const [dragging, setDragging] = useState(false)
-  const [uploading, setUploading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [progress, setProgress] = useState(0)
+export default function WorkspacePage() {
   const inputRef = useRef<HTMLInputElement>(null)
+  const [documents, setDocuments] = useState<DocumentItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('All')
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
-  const handleFile = useCallback(async (file: File) => {
-    setError(null)
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setToast({ type, message })
+    window.setTimeout(() => setToast(null), 3500)
+  }
 
-    if (file.type !== 'application/pdf') {
-      setError('Only PDF files are accepted.')
+  const loadDocuments = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await apiClient.get<DocumentItem[]>('/api/v1/documents')
+      setDocuments(res.data)
+    } catch {
+      showToast('error', 'Không tải được danh sách tài liệu.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadDocuments()
+  }, [loadDocuments])
+
+  const uploadFile = async (file: File) => {
+    const allowed = ['pdf', 'docx', 'txt']
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    if (!ext || !allowed.includes(ext)) {
+      showToast('error', 'Chỉ hỗ trợ PDF, Word (.docx), TXT.')
       return
     }
-
-    const maxBytes = 20 * 1024 * 1024
-    if (file.size > maxBytes) {
-      setError('File exceeds the 20 MB limit.')
+    if (file.size > 20 * 1024 * 1024) {
+      showToast('error', 'File vượt quá giới hạn 20MB.')
       return
     }
-
-    setUploading(true)
-    setProgress(0)
 
     const formData = new FormData()
     formData.append('file', file)
-
+    setUploading(true)
     try {
-      // Sử dụng apiClient thay vì XMLHttpRequest
-      const res = await apiClient.post('/api/v1/documents/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-            setProgress(percentCompleted)
-          }
-        },
-      })
-
-      if (res.status === 202) {
-        const data = res.data
-        // Tạo Document ảo tạm thời để hiện lên UI ngay lập tức
-        const newDoc: Document = {
-          id: data.document_id,
-          title: data.title,
-          status: 'PENDING',
-          created_at: new Date().toISOString(),
-        }
-        onUploadSuccess(newDoc)
+      const res = await apiClient.post('/api/v1/documents/upload', formData)
+      const created: DocumentItem = {
+        id: res.data.document_id,
+        title: res.data.title,
+        original_filename: res.data.original_filename,
+        file_type: res.data.file_type,
+        file_size: res.data.file_size,
+        status: res.data.status,
+        created_at: new Date().toISOString(),
       }
-    } catch (err: any) {
-      console.error('Upload Error:', err)
-      setError(err?.response?.data?.detail?.message || err.message || 'Upload failed')
+      setDocuments((prev) => [created, ...prev])
+      showToast('success', 'Tài liệu đã được lưu vào workspace.')
+    } catch (error) {
+      showToast('error', getApiErrorMessage(error, 'Upload thất bại.'))
     } finally {
       setUploading(false)
-      setProgress(0)
+      if (inputRef.current) inputRef.current.value = ''
     }
-  }, [onUploadSuccess])
-
-  // ── Drag & Drop handlers ───────────────────────────────────────────────────
-  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragging(true) }
-  const onDragLeave = () => setDragging(false)
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFile(file)
-  }
-  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) handleFile(file)
-    e.target.value = ''
   }
 
-  return (
-    <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      onClick={() => !uploading && inputRef.current?.click()}
-      className={`
-        relative border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer
-        transition-all duration-200 select-none
-        ${dragging
-          ? 'border-indigo-400 bg-indigo-500/10 scale-[1.01]'
-          : 'border-white/20 bg-white/5 hover:border-indigo-400/60 hover:bg-indigo-500/5'
-        }
-        ${uploading ? 'pointer-events-none opacity-80' : ''}
-      `}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept="application/pdf"
-        className="hidden"
-        onChange={onInputChange}
-      />
+  const downloadDocument = async (doc: DocumentItem) => {
+    try {
+      const res = await apiClient.get(`/api/v1/documents/${doc.id}/download`, { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = doc.original_filename || `${doc.title}.${doc.file_type || 'bin'}`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      showToast('error', 'Không tải được file.')
+    }
+  }
 
-      {/* Hiển thị lỗi nếu có */}
-      {error && (
-        <div className="absolute top-4 left-0 right-0 text-red-400 font-medium text-sm">
-          {error}
-        </div>
-      )}
-
-      {uploading ? (
-        <div className="flex flex-col items-center gap-4">
-          <div className="text-4xl">⬆️</div>
-          <p className="text-white/70 text-sm">Uploading… {progress}%</p>
-          <div className="w-48 bg-white/10 rounded-full h-2">
-            <div
-              className="bg-indigo-500 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col items-center gap-3">
-          <div className="text-5xl">📄</div>
-          <p className="text-white font-medium">
-            {dragging ? 'Drop your PDF here' : 'Drag & drop a PDF, or click to browse'}
-          </p>
-          <p className="text-white/40 text-sm">Maximum file size: 20 MB</p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Page ──────────────────────────────────────────────────────────────────────
-
-export default function WorkspacePage() {
-  const { user } = useAuthStore()
-  const router = useRouter()
-  const [documents, setDocuments] = useState<Document[]>([])
-  const [loading, setLoading] = useState(true)
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
-
-  // ── Fetch documents on mount ───────────────────────────────────────────────
-  useEffect(() => {
-    const fetchDocs = async () => {
-      try {
-        const res = await apiClient.get<Document[]>('/api/v1/documents')
-        setDocuments(res.data)
-      } catch {
-        showToast('error', 'Failed to load documents.')
-      } finally {
-        setLoading(false)
+  const viewDocument = async (doc: DocumentItem) => {
+    try {
+      const res = await apiClient.get(`/api/v1/documents/${doc.id}/download`, { responseType: 'blob' })
+      const type = doc.file_type === 'pdf'
+        ? 'application/pdf'
+        : doc.file_type === 'txt'
+          ? 'text/plain;charset=utf-8'
+          : res.data.type || 'application/octet-stream'
+      const url = URL.createObjectURL(new Blob([res.data], { type }))
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        showToast('error', 'Trình duyệt đã chặn popup xem file.')
       }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (error) {
+      showToast('error', getApiErrorMessage(error, 'Không mở được file.'))
     }
-    fetchDocs()
-  }, [])
-
-  // ── Socket listener for processing events ─────────────────────────────────
-  useEffect(() => {
-    const token = useAuthStore.getState().accessToken || undefined
-    const socket = initSocket(token)
-
-    socket.on('document:processing_done', (data: { document_id: number }) => {
-      setDocuments(prev =>
-        prev.map(d =>
-          d.id === data.document_id ? { ...d, status: 'COMPLETED' } : d
-        )
-      )
-      showToast('success', `Document processed successfully!`)
-    })
-
-    socket.on('document:processing_failed', (data: { document_id: number; error: string }) => {
-      setDocuments(prev =>
-        prev.map(d =>
-          d.id === data.document_id
-            ? { ...d, status: 'FAILED', error_message: data.error }
-            : d
-        )
-      )
-      showToast('error', `Processing failed: ${data.error}`)
-    })
-
-    return () => {
-      socket.off('document:processing_done')
-      socket.off('document:processing_failed')
-    }
-  }, [])
-
-  const showToast = (type: 'success' | 'error', msg: string) => {
-    setToast({ type, msg })
-    setTimeout(() => setToast(null), 4000)
   }
 
-  const handleUploadSuccess = (doc: Document) => {
-    setDocuments(prev => [doc, ...prev])
-    showToast('success', `"${doc.title}" is now being processed.`)
-  }
-
-  const handleDelete = async (docId: number) => {
-    if (!confirm('Delete this document and all associated flashcards?')) return
+  const deleteDocument = async (docId: number) => {
+    if (!confirm('Xóa tài liệu này và toàn bộ flashcards liên quan?')) return
     try {
       await apiClient.delete(`/api/v1/documents/${docId}`)
-      setDocuments(prev => prev.filter(d => d.id !== docId))
-      showToast('success', 'Document deleted.')
+      setDocuments((prev) => prev.filter((doc) => doc.id !== docId))
+      showToast('success', 'Đã xóa tài liệu.')
     } catch {
-      showToast('error', 'Failed to delete document.')
+      showToast('error', 'Xóa tài liệu thất bại.')
     }
   }
 
+  const renameDocument = async (doc: DocumentItem) => {
+    const nextTitle = window.prompt('Nhập tên hiển thị mới cho tài liệu:', doc.title)
+    if (nextTitle === null) return
+    const title = nextTitle.trim()
+    if (!title) {
+      showToast('error', 'Tên tài liệu không được để trống.')
+      return
+    }
+
+    try {
+      const res = await apiClient.put<DocumentItem>(`/api/v1/documents/${doc.id}`, { title })
+      setDocuments((prev) => prev.map((item) => (item.id === doc.id ? res.data : item)))
+      showToast('success', 'Đã cập nhật tài liệu.')
+    } catch (error) {
+      showToast('error', getApiErrorMessage(error, 'Cập nhật tài liệu thất bại.'))
+    }
+  }
+
+  const filtered = documents.filter((doc) => {
+    const name = (doc.original_filename || doc.title).toLowerCase()
+    if (query && !name.includes(query.toLowerCase())) return false
+    if (filter !== 'All' && doc.file_type?.toUpperCase() !== filter) return false
+    return true
+  })
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 p-6 md:p-10">
-      {/* Toast */}
+    <AppShell>
       {toast && (
-        <div className={`
-          fixed top-6 right-6 z-50 px-5 py-3 rounded-xl shadow-2xl text-sm font-medium
-          border backdrop-blur-sm transition-all duration-300 max-w-sm
-          ${toast.type === 'success'
-            ? 'bg-emerald-900/80 border-emerald-500/40 text-emerald-200'
-            : 'bg-red-900/80 border-red-500/40 text-red-200'
-          }
-        `}>
-          {toast.msg}
+        <div className={`fixed bottom-6 right-6 z-50 rounded-lg px-4 py-3 text-sm font-semibold shadow-lg ${toast.type === 'success' ? 'bg-success-container text-on-success-container' : 'bg-error-container text-on-error-container'}`}>
+          {toast.message}
         </div>
       )}
 
-      <div className="max-w-5xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-1">📚 Workspace</h1>
-          <p className="text-white/50">Upload PDFs and chat with your documents using AI.</p>
+      <PageHeader
+        title="Workspace"
+        subtitle="Document Workspace cho PDF, Word (.docx), TXT. AI là tính năng tương lai."
+        actions={<GradientButton onClick={() => inputRef.current?.click()}><FiUploadCloud className="mr-2" /> Upload</GradientButton>}
+      />
+
+      <SectionCard className="mb-8 border-2 border-dashed border-outline-variant/50 p-8 text-center">
+        <input ref={inputRef} type="file" accept=".pdf,.docx,.txt" className="hidden" onChange={(event) => event.target.files?.[0] && uploadFile(event.target.files[0])} />
+        <FiUploadCloud className="mx-auto mb-3 text-4xl text-primary" />
+        <h2 className="mb-2 font-heading text-xl font-bold text-on-surface">Upload tài liệu học tập</h2>
+        <p className="mb-5 text-sm text-on-surface-variant">Hỗ trợ PDF, Word (.docx), TXT - tối đa 20MB</p>
+        <GradientButton onClick={() => inputRef.current?.click()} disabled={uploading}>
+          {uploading ? 'Đang upload...' : 'Chọn file'}
+        </GradientButton>
+      </SectionCard>
+
+      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex gap-2">
+          {['All', 'PDF', 'DOCX', 'TXT'].map((item) => (
+            <button key={item} onClick={() => setFilter(item)} className={`rounded-full border px-4 py-2 text-sm font-semibold ${filter === item ? 'border-primary bg-primary text-on-primary' : 'border-outline-variant/50 bg-surface text-on-surface-variant'}`}>
+              {item}
+            </button>
+          ))}
         </div>
-
-        {/* Upload Zone */}
-        <UploadZone onUploadSuccess={handleUploadSuccess} />
-
-        {/* Document List */}
-        <div className="mt-8">
-          <h2 className="text-lg font-semibold text-white/80 mb-4">Your Documents</h2>
-
-          {loading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map(i => (
-                <div key={i} className="h-20 bg-white/5 rounded-xl animate-pulse" />
-              ))}
-            </div>
-          ) : documents.length === 0 ? (
-            <div className="text-center py-20 text-white/30">
-              <div className="text-5xl mb-3">📭</div>
-              <p>No documents yet. Upload a PDF to get started.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {documents.map(doc => (
-                <div
-                  key={doc.id}
-                  className="flex items-center justify-between bg-white/5 border border-white/10 rounded-xl px-5 py-4 hover:bg-white/8 transition-colors group"
-                >
-                  {/* Left: title + status */}
-                  <div className="flex items-center gap-4 min-w-0">
-                    <div className="text-2xl shrink-0">
-                      {doc.status === 'COMPLETED' ? '✅' : doc.status === 'FAILED' ? '❌' : '⏳'}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-white font-medium truncate">{doc.title}</p>
-                      <p className="text-white/40 text-xs mt-0.5">
-                        {new Date(doc.created_at).toLocaleDateString('vi-VN', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </p>
-                      {doc.status === 'FAILED' && doc.error_message && (
-                        <p className="text-red-400/80 text-xs mt-1 truncate max-w-xs">
-                          {doc.error_message}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Right: badge + actions */}
-                  <div className="flex items-center gap-3 shrink-0 ml-4">
-                    <StatusBadge status={doc.status} />
-
-                    {doc.status === 'COMPLETED' && (
-                      <Link
-                        href={`/workspace/${doc.id}`}
-                        className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
-                      >
-                        Chat →
-                      </Link>
-                    )}
-
-                    <button
-                      onClick={() => handleDelete(doc.id)}
-                      className="p-1.5 text-white/30 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                      title="Delete document"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+        <div className="relative w-full md:w-80">
+          <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-outline" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search documents..." className="w-full rounded-xl border border-outline-variant/50 bg-surface-container-lowest py-2 pl-10 pr-4 text-sm outline-none focus:border-primary" />
         </div>
       </div>
-    </div>
+
+      {loading ? (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {[1, 2, 3].map((item) => <LoadingSkeleton key={item} type="card" className="h-44" />)}
+        </div>
+      ) : filtered.length === 0 ? (
+        <EmptyState icon={FiFileText} title="No documents found" description="Upload tài liệu để dùng làm nguồn tham chiếu khi tự tạo flashcard." />
+      ) : (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((doc) => (
+            <SectionCard key={doc.id} className="flex flex-col p-5">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="truncate font-heading font-bold text-on-surface" title={doc.original_filename || doc.title}>{doc.original_filename || doc.title}</h3>
+                  <p className="mt-1 text-xs text-on-surface-variant">
+                    {(doc.file_type || 'file').toUpperCase()} · {formatBytes(doc.file_size)} · {new Date(doc.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <StatusBadge status={doc.status} />
+              </div>
+
+              <div className="mt-auto grid grid-cols-2 gap-2 border-t border-outline-variant/30 pt-4">
+                <Link href={`/workspace/${doc.id}`} className="rounded-lg bg-primary-container px-3 py-2 text-center text-sm font-semibold text-on-primary-container">
+                  Flashcards
+                </Link>
+                <button onClick={() => viewDocument(doc)} className="rounded-lg bg-primary-container px-3 py-2 text-sm font-semibold text-on-primary-container">
+                  <FiEye className="mr-1 inline" /> View
+                </button>
+                <Link href={`/flashcards/quiz?doc_id=${doc.id}`} className="rounded-lg bg-surface-container-highest px-3 py-2 text-center text-sm font-semibold text-on-surface">
+                  <FiTarget className="mr-1 inline" /> Quiz
+                </Link>
+                <button onClick={() => downloadDocument(doc)} className="rounded-lg bg-surface-container-highest px-3 py-2 text-sm font-semibold text-on-surface">
+                  <FiDownload className="mr-1 inline" /> Download
+                </button>
+                <button onClick={() => renameDocument(doc)} className="rounded-lg bg-surface-container-highest px-3 py-2 text-sm font-semibold text-on-surface">
+                  <FiEdit2 className="mr-1 inline" /> Rename
+                </button>
+                <button onClick={() => showToast('success', 'Tính năng AI đang phát triển.')} className="rounded-lg bg-surface-container-highest px-3 py-2 text-sm font-semibold text-on-surface-variant">
+                  <FiMessageSquare className="mr-1 inline" /> AI Chat
+                </button>
+                <Link href={`/workspace/${doc.id}?tab=flashcards`} className="rounded-lg bg-surface-container-highest px-3 py-2 text-center text-sm font-semibold text-on-surface">
+                  <FiLayers className="mr-1 inline" /> Create
+                </Link>
+                <button onClick={() => deleteDocument(doc.id)} className="rounded-lg bg-error-container/40 px-3 py-2 text-sm font-semibold text-error">
+                  <FiTrash2 className="mr-1 inline" /> Delete
+                </button>
+              </div>
+            </SectionCard>
+          ))}
+        </div>
+      )}
+    </AppShell>
   )
 }

@@ -5,10 +5,12 @@ Schedule service layer.
 from datetime import datetime, time, timezone
 from typing import Iterable, List, Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.models import Document, DocumentStatus, Flashcard, Schedule
 from app.schemas.schedule import ScheduleCreate, ScheduleResponse, ScheduleUpdate
 
@@ -207,8 +209,13 @@ async def list_today_schedules(
     db: AsyncSession,
     user_id: UUID,
 ) -> List[Schedule]:
-    """List schedules intersecting today's UTC day."""
-    now = datetime.now(timezone.utc)
-    start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
-    end = datetime.combine(now.date(), time.max, tzinfo=timezone.utc)
+    """List schedules intersecting today's configured local day."""
+    try:
+        local_tz = ZoneInfo(settings.app_timezone)
+    except ZoneInfoNotFoundError:
+        local_tz = timezone.utc
+
+    now = datetime.now(local_tz)
+    start = datetime.combine(now.date(), time.min, tzinfo=local_tz).astimezone(timezone.utc)
+    end = datetime.combine(now.date(), time.max, tzinfo=local_tz).astimezone(timezone.utc)
     return await list_schedules(db, user_id, start=start, end=end)

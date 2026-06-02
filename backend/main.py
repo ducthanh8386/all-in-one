@@ -13,7 +13,7 @@ import logging
 from app.core.config import settings
 from app.core.redis import close_redis, health_check as redis_health_check
 from app.db.session import close_db, engine
-from app.api.v1 import auth, documents, flashcards, schedules, admin
+from app.api.v1 import auth, documents, flashcards, schedules, admin, quiz, exam_planner
 from app.sockets.game_handlers import setup_socket_handlers
 
 from slowapi.errors import RateLimitExceeded
@@ -23,10 +23,24 @@ from app.core.rate_limit import limiter
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _cors_origins() -> list[str]:
+    configured = [origin.strip() for origin in settings.frontend_url.split(",") if origin.strip()]
+    dev_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+    return list(dict.fromkeys([*configured, *dev_origins]))
+
+
+cors_origins = _cors_origins()
+
 # Socket.io setup
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=[settings.frontend_url],
+    cors_allowed_origins=cors_origins,
     ping_timeout=60,
     ping_interval=10,
     logger=True,
@@ -94,7 +108,7 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded)
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,6 +118,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(flashcards.router, prefix="/api/v1")
+app.include_router(quiz.router, prefix="/api/v1")
+app.include_router(exam_planner.router, prefix="/api/v1")
 app.include_router(schedules.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 

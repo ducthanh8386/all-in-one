@@ -49,6 +49,8 @@ limits>=3.7.0
 # Utils
 pydantic>=2.7.0
 pytz>=2023.3
+openpyxl>=3.1.2
+reportlab>=4.0.7
 
 # Testing
 pytest>=7.4.3

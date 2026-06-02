@@ -5,7 +5,7 @@ Authentication service.
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from fastapi import HTTPException, status
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from app.db.models import User, RefreshToken
@@ -66,7 +66,7 @@ async def login_user(db: AsyncSession, data: LoginRequest):
     refresh_token = create_refresh_token(data={"sub": str(user.id)})
     
     # Save refresh token to DB
-    expires_at = datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     new_rt = RefreshToken(
         user_id=user.id,
         token=refresh_token,
@@ -102,7 +102,12 @@ async def refresh_access_token(db: AsyncSession, token: str):
     result = await db.execute(query)
     rt_record = result.scalars().first()
     
-    if not rt_record or rt_record.revoked or rt_record.expires_at < datetime.utcnow():
+    now = datetime.now(timezone.utc)
+    expires_at = rt_record.expires_at if rt_record else None
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if not rt_record or rt_record.revoked or expires_at < now:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_create_error("UNAUTHORIZED", "Refresh token invalid or expired")

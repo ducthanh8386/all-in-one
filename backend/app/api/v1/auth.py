@@ -63,8 +63,8 @@ async def refresh(response: Response, brainsync_refresh: str = Cookie(None), db:
 
 
 @router.post("/logout")
-async def logout(response: Response, brainsync_refresh: str = Cookie(None), db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Logout user and revoke refresh token."""
+async def logout(response: Response, brainsync_refresh: str = Cookie(None), db: AsyncSession = Depends(get_db)):
+    """Logout user, revoke refresh token when present, and clear cookie."""
     if brainsync_refresh:
         await auth_service.logout_user(db, brainsync_refresh)
     

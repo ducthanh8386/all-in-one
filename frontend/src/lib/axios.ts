@@ -6,9 +6,6 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8
 const axiosInstance = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 })
 
 // Request interceptor
@@ -18,10 +15,28 @@ axiosInstance.interceptors.request.use(
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`
     }
+    if (config.data instanceof FormData && config.headers) {
+      delete config.headers['Content-Type']
+    }
     return config
   },
   (error) => Promise.reject(error)
 )
+
+export function getApiErrorMessage(error: unknown, fallback = 'Request failed.'): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data
+    const message =
+      data?.error?.message ||
+      data?.detail?.error?.message ||
+      data?.detail?.message ||
+      data?.detail
+
+    return typeof message === 'string' ? message : fallback
+  }
+
+  return fallback
+}
 
 // Response interceptor
 const AUTH_SKIP_URLS = ['/auth/login', '/auth/register', '/auth/refresh']

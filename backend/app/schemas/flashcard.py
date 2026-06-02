@@ -17,7 +17,10 @@ class FlashcardCreate(BaseModel):
     """Payload to manually create a new flashcard."""
     front_text: str
     back_text: str
+    tag: Optional[str] = None
     doc_id: Optional[int] = None
+    subject_id: Optional[int] = None
+    chapter_id: Optional[int] = None
 
     @field_validator("front_text", "back_text")
     @classmethod
@@ -26,6 +29,14 @@ class FlashcardCreate(BaseModel):
             raise ValueError("Field must not be empty.")
         return v.strip()
 
+    @field_validator("tag", mode="before")
+    @classmethod
+    def strip_tag(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = str(v).strip()
+        return stripped or None
+
 
 # ─── Update ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +44,9 @@ class FlashcardUpdate(BaseModel):
     """Payload to update front/back text of a flashcard."""
     front_text: Optional[str] = None
     back_text: Optional[str] = None
+    tag: Optional[str] = None
+    subject_id: Optional[int] = None
+    chapter_id: Optional[int] = None
 
     @field_validator("front_text", "back_text", mode="before")
     @classmethod
@@ -40,6 +54,14 @@ class FlashcardUpdate(BaseModel):
         if v is not None and not v.strip():
             raise ValueError("Field must not be empty if provided.")
         return v.strip() if v else v
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def strip_tag(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = str(v).strip()
+        return stripped or None
 
 
 # ─── Review ──────────────────────────────────────────────────────────────────
@@ -72,8 +94,11 @@ class FlashcardResponse(BaseModel):
     id: int
     doc_id: Optional[int]
     user_id: uuid.UUID          # Pydantic v2 auto-serialises UUID → str in JSON
+    subject_id: Optional[int] = None
+    chapter_id: Optional[int] = None
     front_text: str
     back_text: str
+    tag: Optional[str] = None
     repetition_count: int
     ease_factor: float
     interval_days: int
@@ -89,3 +114,14 @@ class GenerateResponse(BaseModel):
     document_id: int
     generated_count: int
     message: str
+
+
+class ImportErrorItem(BaseModel):
+    row: int
+    message: str
+
+
+class ImportFlashcardsResponse(BaseModel):
+    created: int
+    skipped: int
+    errors: list[ImportErrorItem]

@@ -85,11 +85,17 @@ async def setup_socket_handlers(sio: Any) -> None:
     async def connect(sid: str, environ: Dict[str, Any], auth: Optional[Dict[str, Any]]) -> bool:
         token = str((auth or {}).get("token") or "")
         payload = decode_token(token) if token else None
-        if payload:
-            user_id = str(payload.get("sub") or "")
-            username = str(payload.get("username") or user_id)
-            if user_id:
-                sid_users[sid] = {"id": user_id, "name": username}
+        if not payload:
+            logger.warning("Rejected unauthenticated socket connection: %s", sid)
+            return False
+
+        user_id = str(payload.get("sub") or "")
+        username = str(payload.get("username") or user_id)
+        if not user_id:
+            logger.warning("Rejected socket connection without subject: %s", sid)
+            return False
+
+        sid_users[sid] = {"id": user_id, "name": username}
         logger.info("Socket connected: %s", sid)
         return True
 
@@ -114,18 +120,16 @@ async def setup_socket_handlers(sio: Any) -> None:
     @sio.on("join_room")
     async def join_room(sid: str, payload: Any) -> None:
         room_id = _payload_value(payload, "room_id").upper()
-        user_id = _payload_value(payload, "user_id")
-        username = _payload_value(payload, "username", user_id)
-        if not room_id or not user_id:
-            await _emit_error(sio, sid, "VALIDATION_ERROR", "room_id and user_id are required.")
+        auth_user = _sid_user(sid)
+        if not room_id:
+            await _emit_error(sio, sid, "VALIDATION_ERROR", "room_id is required.")
+            return
+        if not auth_user:
+            await _emit_error(sio, sid, "UNAUTHORIZED", "Authenticated socket connection required.")
             return
 
-        auth_user = _sid_user(sid)
-        if auth_user:
-            user_id = auth_user["id"]
-            username = auth_user["name"]
-        else:
-            sid_users[sid] = {"id": user_id, "name": username}
+        user_id = auth_user["id"]
+        username = auth_user["name"]
 
         client = await get_redis_client()
         try:

@@ -12,12 +12,13 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Document, DocumentStatus, Flashcard
 
 logger = logging.getLogger(__name__)
+UNSET = object()
 
 
 # ─── SM-2 Algorithm ───────────────────────────────────────────────────────────
@@ -88,6 +89,8 @@ async def get_due_cards(
     db: AsyncSession,
     user_id: UUID,
     doc_id: Optional[int] = None,
+    subject_id: Optional[int] = None,
+    chapter_id: Optional[int] = None,
 ) -> List[Flashcard]:
     """Return flashcards whose next_review_date <= now, optionally filtered by doc."""
     now = datetime.now(timezone.utc)
@@ -97,6 +100,10 @@ async def get_due_cards(
     )
     if doc_id is not None:
         query = query.where(Flashcard.doc_id == doc_id)
+    if subject_id is not None:
+        query = query.where(Flashcard.subject_id == subject_id)
+    if chapter_id is not None:
+        query = query.where(Flashcard.chapter_id == chapter_id)
     result = await db.execute(query)
     return list(result.scalars().all())
 
@@ -120,7 +127,10 @@ async def list_user_flashcards(
     db: AsyncSession,
     user_id: UUID,
     doc_id: Optional[int] = None,
+    subject_id: Optional[int] = None,
+    chapter_id: Optional[int] = None,
     due_only: bool = False,
+    q: Optional[str] = None,
 ) -> List[Flashcard]:
     """
     List flashcards for a user.
@@ -131,8 +141,21 @@ async def list_user_flashcards(
 
     if doc_id is not None:
         query = query.where(Flashcard.doc_id == doc_id)
+    if subject_id is not None:
+        query = query.where(Flashcard.subject_id == subject_id)
+    if chapter_id is not None:
+        query = query.where(Flashcard.chapter_id == chapter_id)
     if due_only:
         query = query.where(Flashcard.next_review_date <= now)
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        query = query.where(
+            or_(
+                Flashcard.front_text.ilike(pattern),
+                Flashcard.back_text.ilike(pattern),
+                Flashcard.tag.ilike(pattern),
+            )
+        )
 
     query = query.order_by(Flashcard.next_review_date.asc())
     result = await db.execute(query)
@@ -145,13 +168,19 @@ async def create_flashcard(
     front_text: str,
     back_text: str,
     doc_id: Optional[int] = None,
+    subject_id: Optional[int] = None,
+    chapter_id: Optional[int] = None,
+    tag: Optional[str] = None,
 ) -> Flashcard:
     """Create and persist a new flashcard with SM-2 default values."""
     card = Flashcard(
         user_id=user_id,
         doc_id=doc_id,
+        subject_id=subject_id,
+        chapter_id=chapter_id,
         front_text=front_text,
         back_text=back_text,
+        tag=tag,
         repetition_count=0,
         ease_factor=2.5,
         interval_days=0,
@@ -168,12 +197,21 @@ async def update_flashcard(
     card: Flashcard,
     front_text: Optional[str] = None,
     back_text: Optional[str] = None,
+    tag: object = UNSET,
+    subject_id: object = UNSET,
+    chapter_id: object = UNSET,
 ) -> Flashcard:
     """Update front/back text of an existing flashcard."""
     if front_text is not None:
         card.front_text = front_text
     if back_text is not None:
         card.back_text = back_text
+    if tag is not UNSET:
+        card.tag = tag
+    if subject_id is not UNSET:
+        card.subject_id = subject_id
+    if chapter_id is not UNSET:
+        card.chapter_id = chapter_id
     await db.commit()
     await db.refresh(card)
     return card
@@ -213,7 +251,7 @@ async def record_review(
 async def bulk_insert_flashcards(
     db: AsyncSession,
     user_id: UUID,
-    doc_id: int,
+    doc_id: Optional[int],
     cards: List[dict],
 ) -> int:
     """
@@ -225,8 +263,11 @@ async def bulk_insert_flashcards(
         Flashcard(
             user_id=user_id,
             doc_id=doc_id,
+            subject_id=card.get("subject_id"),
+            chapter_id=card.get("chapter_id"),
             front_text=card.get("front", "").strip(),
             back_text=card.get("back", "").strip(),
+            tag=(card.get("tag") or "").strip() or None,
             repetition_count=0,
             ease_factor=2.5,
             interval_days=0,
@@ -238,5 +279,5 @@ async def bulk_insert_flashcards(
     if rows:
         db.add_all(rows)
         await db.commit()
-    logger.info("Bulk-inserted %d flashcards for doc %d", len(rows), doc_id)
+    logger.info("Bulk-inserted %d flashcards for doc %s", len(rows), doc_id)
     return len(rows)

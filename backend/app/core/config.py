@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     upload_dir: str = "./uploads"
     max_upload_size_mb: int = 20
-    allowed_extensions: str = "pdf"
+    allowed_extensions: str = "pdf,docx,txt"
+    app_timezone: str = "Asia/Saigon"
     frontend_url: str = "http://localhost:3000"
     celery_broker_url: str = "redis://redis:6379/1"
     celery_result_backend: str = "redis://redis:6379/2"

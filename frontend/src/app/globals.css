@@ -10,11 +10,23 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-50 text-gray-900;
+@layer base {
+  body {
+    @apply bg-background text-on-background font-sans antialiased;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading tracking-tight;
+  }
+}
+
+@layer components {
+  .admin-input {
+    @apply h-10 w-full rounded-lg border border-outline-variant/50 bg-white px-3 text-sm outline-none transition-colors focus:border-primary disabled:opacity-50;
+  }
 }
 
 /* Math rendering */
 .math-container {
-  @apply my-2 px-4 py-2 bg-gray-100 rounded-lg overflow-x-auto;
+  @apply my-2 px-4 py-2 bg-surface-container rounded-lg overflow-x-auto;
 }

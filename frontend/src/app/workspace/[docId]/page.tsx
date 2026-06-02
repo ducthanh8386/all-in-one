@@ -1,391 +1,373 @@
 'use client'
 
-/**
- * /workspace/[docId] — Chat interface with a document via SSE streaming RAG.
- * Messages render in real-time as chunks arrive from the server.
- */
-
-import { useEffect, useRef, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useAuthStore } from '@/store/authStore'
-import MathRenderer from '@/components/MathRenderer'
+import { useParams, useRouter } from 'next/navigation'
+import apiClient, { getApiErrorMessage } from '@/lib/axios'
+import { AppShell } from '@/components/layout/AppShell'
+import { SectionCard } from '@/components/shared/SectionCard'
+import { GradientButton } from '@/components/shared/GradientButton'
+import { StatusBadge, type DocStatus } from '@/components/shared/StatusBadge'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { LoadingSkeleton } from '@/components/shared/LoadingSkeleton'
+import { FiArrowLeft, FiDownload, FiEdit2, FiEye, FiFileText, FiMessageSquare, FiPlus, FiSearch, FiTarget, FiTrash2, FiUploadCloud } from 'react-icons/fi'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface Document {
+interface DocumentItem {
   id: number
   title: string
-  status: string
+  original_filename?: string | null
+  file_type?: string | null
+  file_size?: number | null
+  status: DocStatus
+  created_at: string
 }
 
-interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  streaming?: boolean
+interface Flashcard {
+  id: number
+  doc_id: number | null
+  front_text: string
+  back_text: string
+  tag?: string | null
+  next_review_date: string
 }
 
-// ─── Page ──────────────────────────────────────────────────────────────────────
+type Tab = 'flashcards' | 'import' | 'quiz' | 'ai'
 
-export default function ChatPage() {
+const emptyForm = { front_text: '', back_text: '', tag: '' }
+
+function csvTemplate() {
+  return 'front,back,tag\n"Deadlock là gì?","Tình trạng các tiến trình chờ nhau vô hạn.","Operating System"\n"TCP là gì?","Transmission Control Protocol.","Network"'
+}
+
+export default function DocumentDetailPage() {
   const params = useParams()
-  const docId = params?.docId as string
   const router = useRouter()
-  const { user } = useAuthStore()
+  const docId = Number(params?.docId)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const [document, setDocument] = useState<Document | null>(null)
-  const [docLoading, setDocLoading] = useState(true)
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const [quotaWarning, setQuotaWarning] = useState(false)
+  const [documentItem, setDocumentItem] = useState<DocumentItem | null>(null)
+  const [flashcards, setFlashcards] = useState<Flashcard[]>([])
+  const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState<Tab>('flashcards')
+  const [query, setQuery] = useState('')
+  const [form, setForm] = useState(emptyForm)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [importResult, setImportResult] = useState<string | null>(null)
 
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-
-  // ── Fetch document info ────────────────────────────────────────────────────
-  useEffect(() => {
-    const fetchDoc = async () => {
-      try {
-        const token = useAuthStore.getState().accessToken
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/documents/${docId}`,
-          { headers: { Authorization: `Bearer ${token}` }, credentials: 'include' }
-        )
-        if (!res.ok) { router.push('/workspace'); return }
-        const data = await res.json()
-        if (data.status !== 'COMPLETED') { router.push('/workspace'); return }
-        setDocument(data)
-      } catch {
-        router.push('/workspace')
-      } finally {
-        setDocLoading(false)
-      }
-    }
-    if (docId) fetchDoc()
-  }, [docId, router])
-
-  // ── Auto-scroll to latest message ─────────────────────────────────────────
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  // ── Auto-Generate Flashcards ──────────────────────────────────────────────
-  const [generating, setGenerating] = useState(false)
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
-
-  const showToast = (type: 'success' | 'error', msg: string) => {
-    setToast({ type, msg })
-    setTimeout(() => setToast(null), 4000)
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setToast({ type, message })
+    window.setTimeout(() => setToast(null), 3500)
   }
 
-  const handleGenerateFlashcards = async () => {
-    if (generating || !document) return
-    setGenerating(true)
-
+  const loadData = useCallback(async () => {
+    setLoading(true)
     try {
-      const token = useAuthStore.getState().accessToken
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/flashcards/generate/${docId}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
-      })
+      const [docRes, cardsRes] = await Promise.all([
+        apiClient.get<DocumentItem>(`/api/v1/documents/${docId}`),
+        apiClient.get<Flashcard[]>(`/api/v1/flashcards?doc_id=${docId}${query ? `&q=${encodeURIComponent(query)}` : ''}`),
+      ])
+      setDocumentItem(docRes.data)
+      setFlashcards(cardsRes.data)
+    } catch {
+      showToast('error', 'Không tải được tài liệu.')
+    } finally {
+      setLoading(false)
+    }
+  }, [docId, query])
 
-      if (res.ok) {
-        const data = await res.json()
-        showToast('success', `Generated ${data.generated_count} flashcards successfully! Redirecting...`)
-        setTimeout(() => router.push('/flashcards'), 2000)
-      } else if (res.status === 403) {
-        showToast('error', 'AI quota exhausted. Contact admin to refill.')
+  useEffect(() => {
+    if (docId) loadData()
+  }, [docId, loadData])
+
+  const resetForm = () => {
+    setForm(emptyForm)
+    setEditingId(null)
+  }
+
+  const submitCard = async () => {
+    if (!form.front_text.trim() || !form.back_text.trim()) {
+      showToast('error', 'Front và Back là bắt buộc.')
+      return
+    }
+    try {
+      if (editingId) {
+        const res = await apiClient.put<Flashcard>(`/api/v1/flashcards/${editingId}`, form)
+        setFlashcards((prev) => prev.map((card) => card.id === editingId ? res.data : card))
+        showToast('success', 'Đã cập nhật flashcard.')
       } else {
-        showToast('error', 'Failed to generate flashcards. Please try again.')
+        const res = await apiClient.post<Flashcard>('/api/v1/flashcards', { ...form, doc_id: docId })
+        setFlashcards((prev) => [res.data, ...prev])
+        showToast('success', 'Đã tạo flashcard.')
       }
-    } catch (error) {
-      showToast('error', 'An error occurred while generating flashcards.')
-    } finally {
-      setGenerating(false)
+      resetForm()
+    } catch {
+      showToast('error', 'Lưu flashcard thất bại.')
     }
   }
 
-  // ── Send message + SSE streaming ──────────────────────────────────────────
-  const sendMessage = async () => {
-    const question = input.trim()
-    if (!question || sending) return
+  const editCard = (card: Flashcard) => {
+    setEditingId(card.id)
+    setForm({ front_text: card.front_text, back_text: card.back_text, tag: card.tag || '' })
+    setTab('flashcards')
+  }
 
-    const userMsg: Message = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: question,
+  const deleteCard = async (cardId: number) => {
+    if (!confirm('Xóa flashcard này?')) return
+    try {
+      await apiClient.delete(`/api/v1/flashcards/${cardId}`)
+      setFlashcards((prev) => prev.filter((card) => card.id !== cardId))
+      showToast('success', 'Đã xóa flashcard.')
+    } catch {
+      showToast('error', 'Xóa flashcard thất bại.')
     }
-    const assistantMsgId = `ai-${Date.now()}`
-    const assistantMsg: Message = {
-      id: assistantMsgId,
-      role: 'assistant',
-      content: '',
-      streaming: true,
-    }
+  }
 
-    setMessages(prev => [...prev, userMsg, assistantMsg])
-    setInput('')
-    setSending(true)
+  const deleteDocument = async () => {
+    if (!confirm('Xóa tài liệu này và toàn bộ flashcards liên quan?')) return
+    try {
+      await apiClient.delete(`/api/v1/documents/${docId}`)
+      router.push('/workspace')
+    } catch {
+      showToast('error', 'Xóa tài liệu thất bại.')
+    }
+  }
+
+  const renameDocument = async () => {
+    if (!documentItem) return
+    const nextTitle = window.prompt('Nhập tên hiển thị mới cho tài liệu:', documentItem.title)
+    if (nextTitle === null) return
+    const title = nextTitle.trim()
+    if (!title) {
+      showToast('error', 'Tên tài liệu không được để trống.')
+      return
+    }
 
     try {
-      const token = useAuthStore.getState().accessToken
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/documents/${docId}/chat`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          credentials: 'include',
-          body: JSON.stringify({ question }),
-        }
-      )
+      const res = await apiClient.put<DocumentItem>(`/api/v1/documents/${docId}`, { title })
+      setDocumentItem(res.data)
+      showToast('success', 'Đã cập nhật tài liệu.')
+    } catch (error) {
+      showToast('error', getApiErrorMessage(error, 'Cập nhật tài liệu thất bại.'))
+    }
+  }
 
-      if (res.status === 403) {
-        const errData = await res.json()
-        const code = errData?.detail?.error?.code
-        if (code === 'QUOTA_EXCEEDED') {
-          setQuotaWarning(true)
-          setMessages(prev =>
-            prev.map(m =>
-              m.id === assistantMsgId
-                ? { ...m, content: '⚠️ Your AI quota is exhausted. Contact admin to refill.', streaming: false }
-                : m
-            )
-          )
-          return
-        }
+  const downloadDocument = async () => {
+    if (!documentItem) return
+    try {
+      const res = await apiClient.get(`/api/v1/documents/${docId}/download`, { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data)
+      const link = window.document.createElement('a')
+      link.href = url
+      link.download = documentItem.original_filename || `${documentItem.title}.${documentItem.file_type || 'bin'}`
+      window.document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      showToast('error', 'Không tải được file.')
+    }
+  }
+
+  const viewDocument = async () => {
+    if (!documentItem) return
+    try {
+      const res = await apiClient.get(`/api/v1/documents/${docId}/download`, { responseType: 'blob' })
+      const type = documentItem.file_type === 'pdf'
+        ? 'application/pdf'
+        : documentItem.file_type === 'txt'
+          ? 'text/plain;charset=utf-8'
+          : res.data.type || 'application/octet-stream'
+      const url = URL.createObjectURL(new Blob([res.data], { type }))
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        showToast('error', 'Trình duyệt đã chặn popup xem file.')
       }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (error) {
+      showToast('error', getApiErrorMessage(error, 'Không mở được file.'))
+    }
+  }
 
-      if (!res.ok) throw new Error('Chat request failed')
+  const downloadTemplate = () => {
+    const url = URL.createObjectURL(new Blob([csvTemplate()], { type: 'text/csv;charset=utf-8;' }))
+    const link = window.document.createElement('a')
+    link.href = url
+    link.download = 'flashcards_template.csv'
+    window.document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
 
-      const reader = res.body?.getReader()
-      if (!reader) throw new Error('No stream reader available')
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const data = line.slice(6).trim()
-          if (data === '[DONE]') break
-
-          try {
-            const parsed = JSON.parse(data)
-            const chunk: string = parsed.chunk ?? ''
-            if (chunk) {
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === assistantMsgId
-                    ? { ...m, content: m.content + chunk }
-                    : m
-                )
-              )
-            }
-          } catch {
-            // Ignore malformed SSE chunk
-          }
-        }
-      }
-    } catch (err) {
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === assistantMsgId
-            ? { ...m, content: '❌ Failed to get a response. Please try again.', streaming: false }
-            : m
-        )
-      )
+  const importCsv = async (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('doc_id', String(docId))
+    try {
+      const res = await apiClient.post('/api/v1/flashcards/import', formData)
+      setImportResult(`Đã tạo ${res.data.created} thẻ, bỏ qua ${res.data.skipped} dòng.`)
+      await loadData()
+    } catch {
+      showToast('error', 'Import CSV thất bại.')
     } finally {
-      // Mark streaming done
-      setMessages(prev =>
-        prev.map(m => m.id === assistantMsgId ? { ...m, streaming: false } : m)
-      )
-      setSending(false)
-      inputRef.current?.focus()
+      if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      sendMessage()
-    }
-  }
+  const dueCount = flashcards.filter((card) => new Date(card.next_review_date) <= new Date()).length
 
-  // ─── Loading ──────────────────────────────────────────────────────────────
-  if (docLoading) {
+  if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 flex items-center justify-center">
-        <div className="text-white/50 text-lg animate-pulse">Loading document…</div>
-      </div>
+      <AppShell>
+        <LoadingSkeleton type="card" className="h-40" />
+      </AppShell>
     )
   }
 
-  // ─── UI ───────────────────────────────────────────────────────────────────
+  if (!documentItem) {
+    return (
+      <AppShell>
+        <EmptyState icon={FiFileText} title="Document not found" description="Tài liệu không tồn tại hoặc bạn không có quyền truy cập." />
+      </AppShell>
+    )
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 flex flex-col">
-      {/* Toast */}
+    <AppShell>
       {toast && (
-        <div className={`
-          fixed top-6 right-6 z-50 px-5 py-3 rounded-xl shadow-2xl text-sm font-medium
-          border backdrop-blur-sm transition-all duration-300 max-w-sm
-          ${toast.type === 'success'
-            ? 'bg-emerald-900/80 border-emerald-500/40 text-emerald-200'
-            : 'bg-red-900/80 border-red-500/40 text-red-200'
-          }
-        `}>
-          {toast.msg}
+        <div className={`fixed bottom-6 right-6 z-50 rounded-lg px-4 py-3 text-sm font-semibold shadow-lg ${toast.type === 'success' ? 'bg-success-container text-on-success-container' : 'bg-error-container text-on-error-container'}`}>
+          {toast.message}
         </div>
       )}
 
-      {/* Header */}
-      <header className="flex items-center gap-4 px-6 py-4 border-b border-white/10 bg-slate-900/60 backdrop-blur-sm shrink-0">
-        <Link
-          href="/workspace"
-          className="text-white/50 hover:text-white transition-colors text-sm shrink-0"
-        >
-          ← Workspace
-        </Link>
-        <div className="h-4 w-px bg-white/20 shrink-0" />
-        <div className="min-w-0">
-          <h1 className="text-white font-semibold truncate">📄 {document?.title ?? 'Document'}</h1>
+      <div className="mb-6 flex items-start gap-4">
+        <Link href="/workspace" className="rounded-lg p-2 text-on-surface-variant hover:bg-primary-container/20 hover:text-primary"><FiArrowLeft /></Link>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate font-heading text-2xl font-bold text-on-surface">{documentItem.original_filename || documentItem.title}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-on-surface-variant">
+            <span>{(documentItem.file_type || 'file').toUpperCase()}</span>
+            <span>{new Date(documentItem.created_at).toLocaleDateString()}</span>
+            <StatusBadge status={documentItem.status} />
+          </div>
         </div>
+        <button onClick={renameDocument} className="rounded-lg bg-surface-container-highest px-3 py-2 text-sm font-semibold"><FiEdit2 className="mr-1 inline" /> Rename</button>
+        <button onClick={viewDocument} className="rounded-lg bg-primary-container px-3 py-2 text-sm font-semibold text-on-primary-container"><FiEye className="mr-1 inline" /> View</button>
+        <button onClick={downloadDocument} className="rounded-lg bg-surface-container-highest px-3 py-2 text-sm font-semibold"><FiDownload className="mr-1 inline" /> Download</button>
+        <button onClick={deleteDocument} className="rounded-lg bg-error-container/40 px-3 py-2 text-sm font-semibold text-error"><FiTrash2 className="mr-1 inline" /> Delete</button>
+      </div>
 
-        <div className="ml-auto flex items-center gap-4 shrink-0">
-          {/* Auto Generate Button */}
-          <button
-            onClick={handleGenerateFlashcards}
-            disabled={generating}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
-          >
-            {generating ? (
-              <>
-                <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Generating...
-              </>
-            ) : (
-              '✨ Auto-Generate Flashcards'
-            )}
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <SectionCard className="p-4"><p className="text-sm text-on-surface-variant">Flashcards</p><p className="text-3xl font-bold">{flashcards.length}</p></SectionCard>
+        <SectionCard className="p-4"><p className="text-sm text-on-surface-variant">Due today</p><p className="text-3xl font-bold text-primary">{dueCount}</p></SectionCard>
+        <SectionCard className="p-4"><p className="text-sm text-on-surface-variant">AI</p><p className="text-sm font-semibold text-on-surface">Tính năng AI đang phát triển</p></SectionCard>
+      </div>
+
+      <div className="mb-6 flex gap-2 overflow-x-auto border-b border-outline-variant/30">
+        {[
+          ['flashcards', 'Flashcards'],
+          ['import', 'Import CSV'],
+          ['quiz', 'Quiz Practice'],
+          ['ai', 'AI Tools'],
+        ].map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key as Tab)} className={`border-b-2 px-4 py-3 text-sm font-semibold ${tab === key ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant'}`}>
+            {label}
           </button>
-
-          {/* AI Quota */}
-          {user && (
-            <div className="flex items-center gap-2 text-xs text-white/40 border-l border-white/10 pl-4">
-              <span>AI Quota:</span>
-              <span className={`font-mono font-bold ${user.ai_quota <= 10 ? 'text-red-400' : 'text-emerald-400'}`}>
-                {user.ai_quota}
-              </span>
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-6 max-w-4xl mx-auto w-full">
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center py-20 text-white/30">
-            <div className="text-6xl mb-4">🤖</div>
-            <p className="text-lg font-medium text-white/50">Ask anything about your document</p>
-            <p className="text-sm mt-1">Questions, summaries, explanations — AI will answer from your PDF.</p>
-          </div>
-        )}
-
-        {messages.map(msg => (
-          <div
-            key={msg.id}
-            className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            {msg.role === 'assistant' && (
-              <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-sm shrink-0 mt-1">
-                🤖
-              </div>
-            )}
-
-            <div
-              className={`max-w-[80%] rounded-2xl px-4 py-3 ${msg.role === 'user'
-                  ? 'bg-indigo-600 text-white rounded-br-sm'
-                  : 'bg-white/8 border border-white/10 text-white/90 rounded-bl-sm'
-                }`}
-            >
-              {msg.role === 'user' ? (
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-              ) : (
-                <div className="text-sm">
-                  {msg.content ? (
-                    <MathRenderer content={msg.content} />
-                  ) : (
-                    msg.streaming && (
-                      <div className="flex gap-1 items-center h-5">
-                        <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce [animation-delay:0ms]" />
-                        <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce [animation-delay:150ms]" />
-                        <span className="w-2 h-2 bg-white/40 rounded-full animate-bounce [animation-delay:300ms]" />
-                      </div>
-                    )
-                  )}
-                </div>
-              )}
-            </div>
-
-            {msg.role === 'user' && (
-              <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-sm shrink-0 mt-1">
-                👤
-              </div>
-            )}
-          </div>
         ))}
-
-        <div ref={messagesEndRef} />
       </div>
 
-      {/* Quota warning banner */}
-      {quotaWarning && (
-        <div className="mx-4 md:mx-8 mb-2 px-4 py-2 bg-red-900/40 border border-red-500/30 rounded-xl text-red-300 text-sm text-center">
-          ⚠️ AI quota exhausted. Contact admin to get more credits.
+      {tab === 'flashcards' && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[360px_1fr]">
+          <SectionCard className="p-5">
+            <h2 className="mb-4 font-heading text-lg font-bold">{editingId ? 'Edit flashcard' : 'Create flashcard'}</h2>
+            <div className="space-y-3">
+              <textarea value={form.front_text} onChange={(event) => setForm({ ...form, front_text: event.target.value })} placeholder="Front" className="h-24 w-full rounded-lg border border-outline-variant/50 bg-surface-container-lowest p-3 text-sm outline-none focus:border-primary" />
+              <textarea value={form.back_text} onChange={(event) => setForm({ ...form, back_text: event.target.value })} placeholder="Back" className="h-28 w-full rounded-lg border border-outline-variant/50 bg-surface-container-lowest p-3 text-sm outline-none focus:border-primary" />
+              <input value={form.tag} onChange={(event) => setForm({ ...form, tag: event.target.value })} placeholder="Tag (optional)" className="w-full rounded-lg border border-outline-variant/50 bg-surface-container-lowest p-3 text-sm outline-none focus:border-primary" />
+              <div className="flex gap-2">
+                <GradientButton onClick={submitCard} className="flex-1"><FiPlus className="mr-2" /> {editingId ? 'Save' : 'Create'}</GradientButton>
+                {editingId && <button onClick={resetForm} className="rounded-lg border border-outline-variant/50 px-4 text-sm font-semibold">Cancel</button>}
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard className="p-5">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="relative flex-1">
+                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-outline" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search front, back, tag..." className="w-full rounded-lg border border-outline-variant/50 bg-surface-container-lowest py-2 pl-10 pr-4 text-sm outline-none focus:border-primary" />
+              </div>
+              <button onClick={loadData} className="rounded-lg bg-surface-container-highest px-4 py-2 text-sm font-semibold">Search</button>
+            </div>
+
+            {flashcards.length === 0 ? (
+              <EmptyState icon={FiFileText} title="No flashcards" description="Tạo thủ công hoặc import CSV để bắt đầu." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-outline-variant/30 text-on-surface-variant">
+                    <tr><th className="py-3">Front</th><th>Back</th><th>Tag</th><th className="text-right">Actions</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-outline-variant/20">
+                    {flashcards.map((card) => (
+                      <tr key={card.id}>
+                        <td className="max-w-[220px] truncate py-3 font-medium">{card.front_text}</td>
+                        <td className="max-w-[280px] truncate text-on-surface-variant">{card.back_text}</td>
+                        <td className="text-on-surface-variant">{card.tag || '-'}</td>
+                        <td className="text-right">
+                          <button onClick={() => editCard(card)} className="p-2 text-primary"><FiEdit2 /></button>
+                          <button onClick={() => deleteCard(card.id)} className="p-2 text-error"><FiTrash2 /></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </SectionCard>
         </div>
       )}
 
-      {/* Input */}
-      <div className="shrink-0 px-4 md:px-8 py-4 border-t border-white/10 bg-slate-900/60 backdrop-blur-sm">
-        <div className="max-w-4xl mx-auto flex gap-3 items-end">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask a question about your document…"
-            rows={1}
-            disabled={sending}
-            className="flex-1 bg-white/8 border border-white/15 rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/60 focus:border-indigo-500/60 transition disabled:opacity-50 max-h-40 overflow-y-auto"
-            style={{ minHeight: '48px' }}
-            onInput={(e) => {
-              const el = e.currentTarget
-              el.style.height = 'auto'
-              el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-            }}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={sending || !input.trim()}
-            className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/10 disabled:text-white/30 text-white font-medium rounded-xl transition-all text-sm shrink-0 h-12"
-          >
-            {sending ? '…' : 'Send ↑'}
-          </button>
+      {tab === 'import' && (
+        <SectionCard className="max-w-2xl p-8 text-center">
+          <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(event) => event.target.files?.[0] && importCsv(event.target.files[0])} />
+          <FiUploadCloud className="mx-auto mb-4 text-4xl text-primary" />
+          <h2 className="mb-2 font-heading text-xl font-bold">Import CSV</h2>
+          <p className="mb-6 text-sm text-on-surface-variant">Format: front,back,tag. Tag là optional.</p>
+          <div className="flex flex-col justify-center gap-3 sm:flex-row">
+            <GradientButton onClick={() => fileInputRef.current?.click()}>Import CSV</GradientButton>
+            <button onClick={downloadTemplate} className="rounded-lg border border-outline-variant/50 px-4 py-2 text-sm font-semibold"><FiDownload className="mr-1 inline" /> Download template</button>
+          </div>
+          {importResult && <p className="mt-5 rounded-lg bg-success-container/40 p-3 text-sm font-semibold text-on-success-container">{importResult}</p>}
+        </SectionCard>
+      )}
+
+      {tab === 'quiz' && (
+        <SectionCard className="max-w-xl p-8 text-center">
+          <FiTarget className="mx-auto mb-4 text-4xl text-primary" />
+          <h2 className="mb-2 font-heading text-xl font-bold">Quiz Practice</h2>
+          <p className="mb-6 text-sm text-on-surface-variant">Quiz được sinh từ flashcards có sẵn trong tài liệu này, không dùng AI.</p>
+          {flashcards.length < 4 ? (
+            <p className="rounded-lg bg-error-container/30 p-3 text-sm font-semibold text-error">Cần ít nhất 4 flashcards để tạo quiz trắc nghiệm.</p>
+          ) : (
+            <Link href={`/flashcards/quiz?doc_id=${docId}`}><GradientButton>Start Quiz</GradientButton></Link>
+          )}
+        </SectionCard>
+      )}
+
+      {tab === 'ai' && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {['AI Chat', 'Tạo flashcard bằng AI', 'Tạo quiz bằng AI'].map((label) => (
+            <SectionCard key={label} className="p-6 text-center opacity-80">
+              <FiMessageSquare className="mx-auto mb-3 text-3xl text-on-surface-variant" />
+              <h3 className="mb-2 font-heading font-bold">{label}</h3>
+              <button onClick={() => showToast('success', 'Tính năng AI đang phát triển.')} className="rounded-lg bg-surface-container-highest px-4 py-2 text-sm font-semibold text-on-surface-variant">
+                Tính năng AI đang phát triển
+              </button>
+            </SectionCard>
+          ))}
         </div>
-        <p className="text-center text-white/20 text-xs mt-2">
-          Press Enter to send · Shift+Enter for new line
-        </p>
-      </div>
-    </div>
+      )}
+    </AppShell>
   )
 }

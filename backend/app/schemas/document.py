@@ -19,10 +19,12 @@ class DocumentResponse(BaseModel):
     """Response schema for a document record."""
     id: int
     title: str
+    original_filename: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
     status: DocumentStatus
     vector_collection_name: Optional[str] = None
     error_message: Optional[str] = None
-    file_path: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -32,8 +34,26 @@ class UploadResponse(BaseModel):
     """Response schema for a successful document upload."""
     document_id: int
     title: str
+    original_filename: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
     status: DocumentStatus
     message: str
+
+
+class DocumentUpdate(BaseModel):
+    """Payload for updating user-editable document metadata."""
+    title: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_empty(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        title = value.strip()
+        if not title:
+            raise ValueError("Title must not be empty.")
+        return title[:255]
 
 
 class ChatRequest(BaseModel):

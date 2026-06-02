@@ -1,237 +1,186 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { motion, AnimatePresence } from 'framer-motion'
 import apiClient from '@/lib/axios'
+import { AppShell } from '@/components/layout/AppShell'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { SectionCard } from '@/components/shared/SectionCard'
+import { GradientButton } from '@/components/shared/GradientButton'
+import { LoadingSkeleton } from '@/components/shared/LoadingSkeleton'
+import { FiArrowLeft, FiCheckCircle, FiPlayCircle, FiRefreshCw, FiTarget, FiXCircle } from 'react-icons/fi'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface Flashcard {
+interface DocumentItem {
   id: number
-  front_text: string
-  back_text: string
-  repetition_count: number
+  title: string
+  original_filename?: string | null
 }
 
-// ─── Page ──────────────────────────────────────────────────────────────────────
+interface QuizQuestion {
+  card_id: number
+  question: string
+  options: string[]
+  correct_option_index: number
+}
 
-export default function QuizModePage() {
-  const [queue, setQueue] = useState<Flashcard[]>([])
+type QuizState = 'setup' | 'session' | 'result'
+
+export default function QuizPracticePage() {
+  const [documents, setDocuments] = useState<DocumentItem[]>([])
+  const [selectedDocId, setSelectedDocId] = useState<string>('all')
+  const [limit, setLimit] = useState(10)
+  const [questions, setQuestions] = useState<QuizQuestion[]>([])
+  const [quizState, setQuizState] = useState<QuizState>('setup')
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [selectedOption, setSelectedOption] = useState<number | null>(null)
+  const [score, setScore] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [showAnswer, setShowAnswer] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  // Fetch due cards
   useEffect(() => {
-    const fetchDueCards = async () => {
-      try {
-        const res = await apiClient.get<Flashcard[]>('/api/v1/flashcards/due')
-        setQueue(res.data)
-      } catch (error) {
-        console.error('Failed to fetch due flashcards:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-    fetchDueCards()
+    const query = new URLSearchParams(window.location.search)
+    const docId = query.get('doc_id')
+    if (docId) setSelectedDocId(docId)
+    apiClient.get<DocumentItem[]>('/api/v1/documents')
+      .then((res) => setDocuments(res.data))
+      .catch(() => setError('Không tải được danh sách tài liệu.'))
+      .finally(() => setLoading(false))
   }, [])
 
-  // Handlers
-  const handleShowAnswer = () => {
-    setShowAnswer(true)
+  const startQuiz = async () => {
+    setError(null)
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (selectedDocId !== 'all') params.set('doc_id', selectedDocId)
+    try {
+      const res = await apiClient.get<{ questions: QuizQuestion[] }>(`/api/v1/quiz?${params}`)
+      setQuestions(res.data.questions)
+      setCurrentIndex(0)
+      setSelectedOption(null)
+      setScore(0)
+      setQuizState('session')
+    } catch (err: any) {
+      setError(err?.response?.data?.error?.message || 'Không tạo được quiz.')
+    }
   }
 
-  const handleReview = useCallback(async (quality: number) => {
-    if (submitting || queue.length === 0) return
-    setSubmitting(true)
-
-    const currentCard = queue[0]
-
-    try {
-      await apiClient.post(`/api/v1/flashcards/${currentCard.id}/review`, { quality })
-      
-      // Delay slightly for UI smoothness, then pop the card
-      setTimeout(() => {
-        setQueue(prev => prev.slice(1))
-        setShowAnswer(false)
-        setSubmitting(false)
-      }, 150)
-
-    } catch (error) {
-      console.error('Review submission failed:', error)
-      setSubmitting(false)
+  const chooseOption = (index: number) => {
+    if (selectedOption !== null) return
+    setSelectedOption(index)
+    if (index === questions[currentIndex].correct_option_index) {
+      setScore((value) => value + 1)
     }
-  }, [queue, submitting])
+  }
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (queue.length === 0 || submitting) return
-
-      if (!showAnswer && (e.code === 'Space' || e.code === 'Enter')) {
-        e.preventDefault()
-        handleShowAnswer()
-      } else if (showAnswer) {
-        if (e.key === '1') handleReview(2) // Hard
-        if (e.key === '2') handleReview(4) // Good
-        if (e.key === '3') handleReview(5) // Easy
-      }
+  const nextQuestion = () => {
+    if (currentIndex < questions.length - 1) {
+      setCurrentIndex((value) => value + 1)
+      setSelectedOption(null)
+    } else {
+      setQuizState('result')
     }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleReview, showAnswer, queue.length, submitting])
-
-
-  // ─── Render ─────────────────────────────────────────────────────────────────
+  }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center">
-        <div className="w-10 h-10 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin mb-4" />
-        <p className="text-white/50">Loading your study deck...</p>
-      </div>
+      <AppShell>
+        <LoadingSkeleton type="card" className="h-80" />
+      </AppShell>
     )
   }
 
-  if (queue.length === 0) {
+  if (quizState === 'setup') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 flex flex-col items-center justify-center p-6 text-center">
-        <motion.div
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ type: "spring", bounce: 0.5 }}
-          className="bg-white/10 border border-white/20 p-10 rounded-3xl max-w-lg shadow-2xl backdrop-blur-md"
-        >
-          <div className="text-7xl mb-6">🎉</div>
-          <h1 className="text-3xl font-bold text-white mb-3">You&apos;re all caught up!</h1>
-          <p className="text-white/70 mb-8 leading-relaxed">
-            Congratulations! You have completed all your reviews for today. 
-            Taking regular breaks helps consolidate memory.
-          </p>
-          <Link
-            href="/flashcards"
-            className="inline-block px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl transition-all shadow-lg shadow-indigo-500/30"
-          >
-            Back to Library
-          </Link>
-        </motion.div>
-      </div>
+      <AppShell>
+        <div className="mb-6 flex items-center gap-4">
+          <Link href="/flashcards" className="rounded-lg p-2 text-on-surface-variant hover:bg-primary-container/20 hover:text-primary"><FiArrowLeft /></Link>
+          <PageHeader title="Quiz Practice" subtitle="Multiple choice quiz sinh từ flashcards hiện có, không dùng AI." />
+        </div>
+
+        <SectionCard className="max-w-3xl p-8">
+          <FiTarget className="mb-4 text-4xl text-primary" />
+          <h2 className="mb-6 font-heading text-2xl font-bold">Configure Quiz</h2>
+          <div className="space-y-5">
+            <div>
+              <label className="mb-2 block text-sm font-semibold">Deck</label>
+              <select value={selectedDocId} onChange={(event) => setSelectedDocId(event.target.value)} className="w-full rounded-lg border border-outline-variant/50 bg-surface-container-lowest p-3 text-sm outline-none focus:border-primary">
+                <option value="all">All Documents</option>
+                {documents.map((doc) => <option key={doc.id} value={doc.id}>{doc.original_filename || doc.title}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-semibold">Number of questions</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[5, 10, 20].map((value) => <button key={value} onClick={() => setLimit(value)} className={`rounded-lg border px-4 py-3 text-sm font-bold ${limit === value ? 'border-primary bg-primary text-on-primary' : 'border-outline-variant/50'}`}>{value}</button>)}
+              </div>
+            </div>
+            {error && <p className="rounded-lg bg-error-container/30 p-3 text-sm font-semibold text-error">{error}</p>}
+            <GradientButton onClick={startQuiz} className="w-full justify-center"><FiPlayCircle className="mr-2" /> Start Quiz</GradientButton>
+          </div>
+        </SectionCard>
+      </AppShell>
     )
   }
 
-  const currentCard = queue[0]
-
-  return (
-    <div className="min-h-screen bg-slate-950 flex flex-col overflow-hidden">
-      
-      {/* Header */}
-      <header className="px-6 py-4 flex items-center justify-between border-b border-white/10 bg-slate-900/50 backdrop-blur-sm z-10">
-        <Link href="/flashcards" className="text-white/50 hover:text-white transition-colors text-sm font-medium">
-          ← Exit Quiz
-        </Link>
-        <div className="text-white/50 text-sm font-medium bg-white/5 px-4 py-1.5 rounded-full border border-white/10">
-          <span className="text-indigo-400 font-bold">{queue.length}</span> cards remaining
-        </div>
-      </header>
-
-      {/* Main Play Area */}
-      <main className="flex-1 relative flex flex-col items-center justify-center p-6 perspective-1000">
-        <AnimatePresence mode="popLayout">
-          <motion.div
-            key={currentCard.id}
-            initial={{ opacity: 0, x: 100, rotateY: -20 }}
-            animate={{ opacity: 1, x: 0, rotateY: 0 }}
-            exit={{ opacity: 0, x: -100, rotateY: 20, scale: 0.9 }}
-            transition={{ duration: 0.4, type: "spring", bounce: 0.2 }}
-            className="w-full max-w-2xl aspect-[4/3] md:aspect-[3/2] relative preserve-3d"
-          >
-            {/* The Flipping Card */}
-            <motion.div
-              className="w-full h-full relative preserve-3d"
-              animate={{ rotateX: showAnswer ? 180 : 0 }}
-              transition={{ duration: 0.6, type: "spring", stiffness: 200, damping: 20 }}
-              style={{ transformStyle: 'preserve-3d' }}
-            >
-              {/* Front Face */}
-              <div 
-                className="absolute w-full h-full backface-hidden bg-slate-800 border border-slate-700 rounded-3xl p-8 md:p-12 flex flex-col justify-center items-center shadow-2xl"
-                style={{ backfaceVisibility: 'hidden' }}
-              >
-                <div className="absolute top-6 text-slate-500 text-sm font-bold uppercase tracking-widest">
-                  Question
-                </div>
-                <h2 className="text-2xl md:text-4xl font-medium text-slate-100 text-center leading-relaxed">
-                  {currentCard.front_text}
-                </h2>
-              </div>
-
-              {/* Back Face */}
-              <div 
-                className="absolute w-full h-full backface-hidden bg-indigo-900/80 border border-indigo-500/30 rounded-3xl p-8 md:p-12 flex flex-col justify-center items-center shadow-2xl overflow-y-auto"
-                style={{ backfaceVisibility: 'hidden', transform: 'rotateX(180deg)' }}
-              >
-                <div className="absolute top-6 text-indigo-400/60 text-sm font-bold uppercase tracking-widest">
-                  Answer
-                </div>
-                <p className="text-xl md:text-3xl text-indigo-50 text-center leading-relaxed whitespace-pre-wrap mt-8">
-                  {currentCard.back_text}
-                </p>
-              </div>
-            </motion.div>
-          </motion.div>
-        </AnimatePresence>
-      </main>
-
-      {/* Footer Controls */}
-      <footer className="h-32 shrink-0 border-t border-white/5 bg-slate-900/80 backdrop-blur-md flex items-center justify-center px-6 z-10">
-        <div className="w-full max-w-2xl">
-          {!showAnswer ? (
-            <button
-              onClick={handleShowAnswer}
-              className="w-full py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-lg transition-colors shadow-lg shadow-indigo-500/20 active:scale-[0.98]"
-            >
-              Show Answer
-              <span className="block text-xs text-indigo-300 mt-1 font-normal opacity-80 hidden md:block">Press Space or Enter</span>
-            </button>
-          ) : (
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="grid grid-cols-3 gap-3 md:gap-4"
-            >
-              <button
-                onClick={() => handleReview(2)}
-                disabled={submitting}
-                className="group flex flex-col items-center justify-center py-3 bg-red-950/40 hover:bg-red-900/60 border border-red-900/50 hover:border-red-500/50 rounded-2xl transition-all disabled:opacity-50"
-              >
-                <span className="text-red-400 font-semibold mb-1">Hard</span>
-                <span className="text-xs text-red-500/50 group-hover:text-red-400/80">Press 1</span>
-              </button>
-              
-              <button
-                onClick={() => handleReview(4)}
-                disabled={submitting}
-                className="group flex flex-col items-center justify-center py-3 bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-900/50 hover:border-emerald-500/50 rounded-2xl transition-all disabled:opacity-50"
-              >
-                <span className="text-emerald-400 font-semibold mb-1">Good</span>
-                <span className="text-xs text-emerald-500/50 group-hover:text-emerald-400/80">Press 2</span>
-              </button>
-              
-              <button
-                onClick={() => handleReview(5)}
-                disabled={submitting}
-                className="group flex flex-col items-center justify-center py-3 bg-blue-950/40 hover:bg-blue-900/60 border border-blue-900/50 hover:border-blue-500/50 rounded-2xl transition-all disabled:opacity-50"
-              >
-                <span className="text-blue-400 font-semibold mb-1">Easy</span>
-                <span className="text-xs text-blue-500/50 group-hover:text-blue-400/80">Press 3</span>
-              </button>
-            </motion.div>
+  if (quizState === 'session') {
+    const question = questions[currentIndex]
+    return (
+      <AppShell>
+        <div className="mx-auto max-w-3xl">
+          <div className="mb-6 flex items-center justify-between">
+            <button onClick={() => setQuizState('setup')} className="flex items-center gap-2 text-sm font-semibold text-on-surface-variant"><FiArrowLeft /> Exit</button>
+            <p className="text-sm font-semibold text-on-surface-variant">Question {currentIndex + 1} / {questions.length} · Score {score}</p>
+          </div>
+          <SectionCard className="mb-5 p-8">
+            <p className="mb-2 text-xs font-bold uppercase text-primary">Question</p>
+            <h1 className="whitespace-pre-wrap text-2xl font-semibold text-on-surface">{question.question}</h1>
+          </SectionCard>
+          <div className="space-y-3">
+            {question.options.map((option, index) => {
+              const correct = index === question.correct_option_index
+              const selected = selectedOption === index
+              const locked = selectedOption !== null
+              const className = locked && correct
+                ? 'border-success bg-success/10 text-success'
+                : locked && selected
+                  ? 'border-error bg-error-container/30 text-error'
+                  : locked
+                    ? 'border-outline-variant/20 bg-surface-container-low text-on-surface-variant/60'
+                    : 'border-outline-variant/50 bg-surface-container-lowest text-on-surface hover:border-primary'
+              return (
+                <button key={`${question.card_id}-${index}`} onClick={() => chooseOption(index)} disabled={locked} className={`flex w-full items-center justify-between rounded-xl border-2 p-4 text-left font-semibold ${className}`}>
+                  <span>{option}</span>
+                  {locked && correct && <FiCheckCircle />}
+                  {locked && selected && !correct && <FiXCircle />}
+                </button>
+              )
+            })}
+          </div>
+          {selectedOption !== null && (
+            <div className="mt-6">
+              <GradientButton onClick={nextQuestion} className="w-full justify-center">{currentIndex < questions.length - 1 ? 'Next Question' : 'View Results'}</GradientButton>
+            </div>
           )}
         </div>
-      </footer>
+      </AppShell>
+    )
+  }
 
-    </div>
+  const percentage = questions.length ? Math.round((score / questions.length) * 100) : 0
+  return (
+    <AppShell>
+      <div className="mx-auto max-w-2xl text-center">
+        <SectionCard className="p-10">
+          <FiCheckCircle className="mx-auto mb-4 text-5xl text-primary" />
+          <h1 className="mb-2 font-heading text-3xl font-bold">Quiz Complete</h1>
+          <p className="mb-8 text-on-surface-variant">Bạn trả lời đúng {score}/{questions.length} câu.</p>
+          <p className="mb-8 text-6xl font-bold text-primary">{percentage}%</p>
+          <div className="flex flex-col justify-center gap-3 sm:flex-row">
+            <button onClick={() => setQuizState('setup')} className="rounded-lg border border-outline-variant/50 px-4 py-3 text-sm font-semibold"><FiRefreshCw className="mr-1 inline" /> Làm lại</button>
+            <Link href="/flashcards"><GradientButton>Quay lại Flashcards</GradientButton></Link>
+          </div>
+        </SectionCard>
+      </div>
+    </AppShell>
   )
 }

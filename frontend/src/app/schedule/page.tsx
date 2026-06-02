@@ -8,10 +8,20 @@ import {
   SlotInfo,
   Views,
 } from 'react-big-calendar'
-import { format, getDay, parse, startOfWeek } from 'date-fns'
+import { format, getDay, parse, startOfWeek, isSameDay } from 'date-fns'
 import { vi } from 'date-fns/locale'
-import apiClient from '@/lib/axios'
+import apiClient, { getApiErrorMessage } from '@/lib/axios'
 import { Schedule, useSchedulerStore } from '@/store/schedulerStore'
+
+import { AppShell } from '@/components/layout/AppShell'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { SectionCard } from '@/components/shared/SectionCard'
+import { GradientButton } from '@/components/shared/GradientButton'
+import { EmptyState } from '@/components/shared/EmptyState'
+
+import { FiCalendar, FiClock, FiFileText, FiPlus, FiEdit2, FiTrash2, FiExternalLink, FiX, FiCheckCircle } from 'react-icons/fi'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface DocumentOption {
   id: number
@@ -37,8 +47,9 @@ interface CalendarEvent {
   resource: Schedule
 }
 
-const locales = { vi }
+// ─── Configuration ────────────────────────────────────────────────────────────
 
+const locales = { vi }
 const localizer = dateFnsLocalizer({
   format,
   parse,
@@ -86,34 +97,20 @@ function buildPayload(form: ScheduleFormState) {
   }
 }
 
-function getErrorMessage(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'response' in error) {
-    const response = (error as { response?: { data?: any } }).response
-    return (
-      response?.data?.detail?.error?.message ||
-      response?.data?.detail?.message ||
-      response?.data?.detail ||
-      'Request failed.'
-    )
-  }
-  return 'Request failed.'
-}
+// ─── Page Component ────────────────────────────────────────────────────────────
 
 export default function SchedulePage() {
-  const { schedules, setSchedules, addSchedule, updateSchedule, deleteSchedule } =
-    useSchedulerStore()
+  const { schedules, setSchedules, addSchedule, updateSchedule, deleteSchedule } = useSchedulerStore()
+  
   const [documents, setDocuments] = useState<DocumentOption[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
   const [form, setForm] = useState<ScheduleFormState>(emptyForm)
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string; id: number } | null>(null)
 
-  const completedDocs = useMemo(
-    () => documents.filter((document) => document.status === 'COMPLETED'),
-    [documents]
-  )
+  const completedDocs = useMemo(() => documents.filter((doc) => doc.status === 'COMPLETED'), [documents])
 
   const events = useMemo<CalendarEvent[]>(
     () =>
@@ -128,14 +125,10 @@ export default function SchedulePage() {
   )
 
   const selectedDocument = selectedSchedule?.reference_doc_id
-    ? documents.find((document) => document.id === selectedSchedule.reference_doc_id)
+    ? documents.find((doc) => doc.id === selectedSchedule.reference_doc_id)
     : null
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message })
-    window.setTimeout(() => setToast(null), 3500)
-  }
-
+  // ── Fetch Initial Data ───────────────────────────────────────────────────
   useEffect(() => {
     const fetchInitialData = async () => {
       setLoading(true)
@@ -147,14 +140,20 @@ export default function SchedulePage() {
         setSchedules(scheduleRes.data)
         setDocuments(documentRes.data)
       } catch (error) {
-        showToast('error', getErrorMessage(error))
+        showToast('error', getApiErrorMessage(error))
       } finally {
         setLoading(false)
       }
     }
-
     fetchInitialData()
   }, [setSchedules])
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  const showToast = (type: 'success' | 'error', message: string) => {
+    const id = Date.now()
+    setToast({ type, message, id })
+    window.setTimeout(() => setToast(current => current?.id === id ? null : current), 4000)
+  }
 
   const openCreateModal = (start?: Date, end?: Date) => {
     const now = new Date()
@@ -195,7 +194,7 @@ export default function SchedulePage() {
       return
     }
     if (!form.start_time || !form.end_time || new Date(form.end_time) <= new Date(form.start_time)) {
-      showToast('error', 'End time must be after start time.')
+      showToast('error', 'End time must be strictly after start time.')
       return
     }
 
@@ -203,295 +202,386 @@ export default function SchedulePage() {
     try {
       const payload = buildPayload(form)
       if (selectedSchedule) {
-        const response = await apiClient.put<Schedule>(
-          `/api/v1/schedules/${selectedSchedule.id}`,
-          payload
-        )
+        const response = await apiClient.put<Schedule>(`/api/v1/schedules/${selectedSchedule.id}`, payload)
         updateSchedule(selectedSchedule.id, response.data)
         setSelectedSchedule(response.data)
-        showToast('success', 'Schedule updated.')
+        showToast('success', 'Study block updated successfully.')
       } else {
         const response = await apiClient.post<Schedule>('/api/v1/schedules', payload)
         addSchedule(response.data)
         setSelectedSchedule(response.data)
-        showToast('success', 'Schedule created.')
+        showToast('success', 'Study block created successfully.')
       }
       closeModal()
     } catch (error) {
-      showToast('error', getErrorMessage(error))
+      showToast('error', getApiErrorMessage(error))
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async (schedule: Schedule) => {
-    if (!window.confirm('Delete this schedule?')) {
-      return
-    }
+    if (!window.confirm('Delete this study block?')) return
     try {
       await apiClient.delete(`/api/v1/schedules/${schedule.id}`)
       deleteSchedule(schedule.id)
       setSelectedSchedule(null)
-      showToast('success', 'Schedule deleted.')
+      showToast('success', 'Study block deleted.')
     } catch (error) {
-      showToast('error', getErrorMessage(error))
+      showToast('error', getApiErrorMessage(error))
     }
   }
 
+  // ── Today's Data ─────────────────────────────────────────────────────────
+  const today = new Date()
+  const todaysEvents = events.filter(e => isSameDay(e.start, today)).sort((a, b) => a.start.getTime() - b.start.getTime())
+
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
+    <AppShell>
+      {/* Toast Notification */}
       {toast && (
-        <div
-          className={`fixed right-6 top-6 z-50 max-w-sm rounded-md border px-4 py-3 text-sm shadow-xl ${
-            toast.type === 'success'
-              ? 'border-emerald-500/40 bg-emerald-950 text-emerald-100'
-              : 'border-red-500/40 bg-red-950 text-red-100'
-          }`}
-        >
+        <div className={`
+          fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-medium
+          border backdrop-blur-md transition-all duration-300 flex items-center gap-3
+          ${toast.type === 'success' ? 'bg-success-container/90 border-success-container text-on-success-container' : 'bg-error-container/90 border-error-container text-on-error-container'}
+        `}>
           {toast.message}
         </div>
       )}
 
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-5 py-6 lg:px-8">
-        <header className="flex flex-col gap-4 border-b border-white/10 pb-5 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="mb-2 text-sm text-slate-400">Study calendar</p>
-            <h1 className="text-3xl font-semibold tracking-normal text-white">Schedule</h1>
-          </div>
-          <button
-            type="button"
-            onClick={() => openCreateModal()}
-            className="w-full rounded-md bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 md:w-auto"
-          >
-            New schedule
-          </button>
-        </header>
+      {/* Header */}
+      <PageHeader 
+        title="Study Planner" 
+        subtitle="Plan your sessions and keep your reviews on track."
+        actions={
+          <GradientButton onClick={() => openCreateModal()}>
+            <FiPlus className="mr-2" /> Create Study Block
+          </GradientButton>
+        }
+      />
 
-        <section className="grid gap-6 lg:grid-cols-[1fr_320px]">
-          <div className="min-h-[680px] rounded-md border border-white/10 bg-white p-3 text-slate-950">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-8">
+        
+        {/* Main Calendar View */}
+        <div className="flex flex-col gap-6">
+          <SectionCard className="p-4 md:p-6 bg-surface-container-lowest min-h-[700px] overflow-hidden">
             {loading ? (
-              <div className="flex h-[640px] items-center justify-center text-sm text-slate-500">
-                Loading schedules...
+              <div className="flex h-full min-h-[600px] items-center justify-center">
+                <div className="w-10 h-10 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
               </div>
             ) : (
-              <Calendar
-                localizer={localizer}
-                events={events}
-                startAccessor="start"
-                endAccessor="end"
-                titleAccessor="title"
-                defaultView={Views.WEEK}
-                views={[Views.MONTH, Views.WEEK, Views.DAY]}
-                selectable
-                popup
-                step={30}
-                timeslots={2}
-                style={{ minHeight: 640 }}
-                onSelectSlot={handleSelectSlot}
-                onSelectEvent={handleSelectEvent}
-                eventPropGetter={() => ({
-                  className: 'rounded-md border-none bg-emerald-600 text-white',
-                })}
-              />
+              <div className="h-[700px] rbc-theme-stitch">
+                {/* Custom CSS overrides for React Big Calendar will apply globally or via parent context */}
+                <style dangerouslySetInnerHTML={{__html: `
+                  .rbc-theme-stitch .rbc-calendar { font-family: inherit; }
+                  .rbc-theme-stitch .rbc-header { padding: 10px 0; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.1); }
+                  .rbc-theme-stitch .rbc-today { background-color: rgba(99, 102, 241, 0.05); }
+                  .rbc-theme-stitch .rbc-event { border-radius: 6px; padding: 2px 6px; }
+                  .rbc-theme-stitch .rbc-time-view, .rbc-theme-stitch .rbc-month-view { border-color: rgba(255,255,255,0.1); border-radius: 8px; overflow: hidden; }
+                  .rbc-theme-stitch .rbc-day-bg + .rbc-day-bg { border-left: 1px solid rgba(255,255,255,0.05); }
+                  .rbc-theme-stitch .rbc-time-content { border-top: 1px solid rgba(255,255,255,0.05); }
+                  .rbc-theme-stitch .rbc-timeslot-group { border-bottom: 1px solid rgba(255,255,255,0.05); }
+                  .rbc-theme-stitch .rbc-time-header-content { border-left: 1px solid rgba(255,255,255,0.1); }
+                  .rbc-toolbar button { border: 1px solid rgba(255,255,255,0.2) !important; color: inherit !important; border-radius: 8px !important; margin-right: 8px !important; }
+                  .rbc-toolbar button:hover { background-color: rgba(255,255,255,0.1) !important; }
+                  .rbc-toolbar button.rbc-active { background-color: rgba(99, 102, 241, 0.2) !important; color: #818cf8 !important; border-color: #6366f1 !important; box-shadow: none !important; }
+                `}} />
+                <Calendar
+                  localizer={localizer}
+                  events={events}
+                  startAccessor="start"
+                  endAccessor="end"
+                  titleAccessor="title"
+                  defaultView={Views.WEEK}
+                  views={[Views.MONTH, Views.WEEK, Views.DAY]}
+                  selectable
+                  popup
+                  step={30}
+                  timeslots={2}
+                  onSelectSlot={handleSelectSlot}
+                  onSelectEvent={handleSelectEvent}
+                  eventPropGetter={(event) => {
+                    // Highlight selected event
+                    const isSelected = selectedSchedule?.id === event.id
+                    return {
+                      className: `border-none shadow-sm transition-all text-xs font-medium ${
+                        isSelected 
+                          ? 'bg-primary text-on-primary ring-2 ring-primary-container ring-offset-2 ring-offset-surface-container-lowest' 
+                          : 'bg-primary/80 text-on-primary hover:bg-primary'
+                      }`,
+                    }
+                  }}
+                />
+              </div>
             )}
-          </div>
+          </SectionCard>
+        </div>
 
-          <aside className="rounded-md border border-white/10 bg-white/[0.04] p-5">
+        {/* Right Sidebar */}
+        <div className="flex flex-col gap-6">
+          
+          {/* Today Panel */}
+          <SectionCard className="p-6 border-primary/20 bg-gradient-to-b from-primary-container/10 to-surface-container-low">
+            <h3 className="font-heading font-bold text-on-surface text-lg mb-1 flex items-center gap-2">
+              <FiCalendar className="text-primary" /> Today&apos;s Focus
+            </h3>
+            <p className="text-sm text-on-surface-variant mb-6">
+              {today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+            </p>
+
+            <div className="space-y-3">
+              {todaysEvents.length === 0 ? (
+                <div className="text-center py-6 bg-surface-container-lowest rounded-xl border border-outline-variant/30">
+                  <p className="text-sm text-on-surface-variant mb-3">No study blocks planned for today.</p>
+                  <GradientButton variant="secondary" size="sm" onClick={() => openCreateModal()}>
+                    Schedule Now
+                  </GradientButton>
+                </div>
+              ) : (
+                todaysEvents.map(event => (
+                  <button
+                    key={event.id}
+                    onClick={() => handleSelectEvent(event)}
+                    className={`w-full text-left p-3 rounded-xl border transition-colors ${
+                      selectedSchedule?.id === event.id 
+                        ? 'border-primary bg-primary-container/20' 
+                        : 'border-outline-variant/30 bg-surface-container-lowest hover:border-primary/50'
+                    }`}
+                  >
+                    <div className="font-semibold text-on-surface text-sm mb-1 truncate">{event.title}</div>
+                    <div className="flex items-center gap-2 text-xs text-on-surface-variant">
+                      <FiClock /> {format(event.start, 'HH:mm')} - {format(event.end, 'HH:mm')}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </SectionCard>
+
+          {/* Selected Event Details Panel */}
+          <SectionCard className="p-6 flex-1 flex flex-col">
             {selectedSchedule ? (
-              <div className="space-y-5">
+              <div className="space-y-6">
                 <div>
-                  <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">
-                    Selected block
-                  </p>
-                  <h2 className="text-xl font-semibold text-white">{selectedSchedule.title}</h2>
+                  <div className="inline-block px-2.5 py-1 bg-surface-variant text-on-surface-variant text-[10px] font-bold uppercase tracking-widest rounded-md mb-3">
+                    Selected Block
+                  </div>
+                  <h2 className="text-xl font-heading font-bold text-on-surface leading-tight">
+                    {selectedSchedule.title}
+                  </h2>
                   {selectedSchedule.description && (
-                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                    <p className="mt-3 text-sm text-on-surface-variant leading-relaxed">
                       {selectedSchedule.description}
                     </p>
                   )}
                 </div>
 
-                <div className="space-y-2 text-sm text-slate-300">
-                  <p>
-                    <span className="text-slate-500">Start:</span>{' '}
-                    {new Date(selectedSchedule.start_time).toLocaleString()}
-                  </p>
-                  <p>
-                    <span className="text-slate-500">End:</span>{' '}
-                    {new Date(selectedSchedule.end_time).toLocaleString()}
-                  </p>
-                  <p>
-                    <span className="text-slate-500">Due cards:</span>{' '}
-                    {selectedSchedule.flashcard_due_count}
-                  </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 rounded-xl bg-surface-container-lowest border border-outline-variant/30">
+                    <p className="text-xs font-medium text-on-surface-variant mb-1">Start Time</p>
+                    <p className="text-sm font-semibold text-on-surface">{format(new Date(selectedSchedule.start_time), 'HH:mm')}</p>
+                    <p className="text-xs text-on-surface-variant mt-0.5">{format(new Date(selectedSchedule.start_time), 'MMM d, yyyy')}</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-surface-container-lowest border border-outline-variant/30">
+                    <p className="text-xs font-medium text-on-surface-variant mb-1">End Time</p>
+                    <p className="text-sm font-semibold text-on-surface">{format(new Date(selectedSchedule.end_time), 'HH:mm')}</p>
+                    <p className="text-xs text-on-surface-variant mt-0.5">{format(new Date(selectedSchedule.end_time), 'MMM d, yyyy')}</p>
+                  </div>
                 </div>
 
-                {selectedDocument && (
-                  <Link
-                    href={`/workspace/${selectedDocument.id}`}
-                    className="block rounded-md border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-200 transition hover:bg-emerald-400/20"
-                  >
-                    Open document: {selectedDocument.title}
-                  </Link>
+                {selectedSchedule.flashcard_due_count !== undefined && (
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-primary-container/10 border border-primary/20">
+                    <span className="text-sm font-medium text-on-surface">Flashcards Due</span>
+                    <span className="text-primary font-bold">{selectedSchedule.flashcard_due_count}</span>
+                  </div>
                 )}
 
-                <div className="flex gap-3">
+                {selectedDocument && (
+                  <div>
+                    <p className="text-xs font-medium text-on-surface-variant mb-2">Linked Material</p>
+                    <Link
+                      href={`/workspace/${selectedDocument.id}`}
+                      className="flex items-center gap-3 p-3 rounded-xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/50 hover:bg-surface-container-low transition-colors group"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-primary-container/30 text-primary flex items-center justify-center shrink-0">
+                        <FiFileText />
+                      </div>
+                      <span className="text-sm font-medium text-on-surface truncate flex-1 group-hover:text-primary transition-colors">
+                        {selectedDocument.title}
+                      </span>
+                      <FiExternalLink className="text-on-surface-variant group-hover:text-primary transition-colors" />
+                    </Link>
+                  </div>
+                )}
+
+                <div className="pt-4 border-t border-outline-variant/30 flex items-center gap-3 mt-auto">
                   <button
-                    type="button"
                     onClick={() => openEditModal(selectedSchedule)}
-                    className="flex-1 rounded-md bg-slate-100 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-white"
+                    className="flex-1 py-2.5 rounded-xl bg-surface-variant text-on-surface-variant font-medium text-sm hover:bg-surface-container-highest hover:text-on-surface transition-colors flex items-center justify-center gap-2"
                   >
-                    Edit
+                    <FiEdit2 /> Edit
                   </button>
                   <button
-                    type="button"
                     onClick={() => handleDelete(selectedSchedule)}
-                    className="flex-1 rounded-md border border-red-400/40 px-3 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/10"
+                    className="flex-1 py-2.5 rounded-xl bg-error-container/20 text-error font-medium text-sm border border-error/20 hover:bg-error-container hover:text-on-error-container transition-colors flex items-center justify-center gap-2"
                   >
-                    Delete
+                    <FiTrash2 /> Delete
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="flex min-h-[280px] flex-col justify-center text-sm leading-6 text-slate-400">
-                <p>Select a calendar block to inspect it.</p>
-                <p>Click or drag on the calendar to create a new study block.</p>
-              </div>
+              <EmptyState 
+                icon={FiCalendar}
+                title="No block selected"
+                description="Click on a calendar event to view its details, or click any empty slot to create a new one."
+              />
             )}
-          </aside>
-        </section>
+          </SectionCard>
+
+        </div>
       </div>
 
+      {/* Create/Edit Modal */}
       {modalOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
-          <form
-            onSubmit={handleSubmit}
-            className="w-full max-w-xl rounded-md border border-white/10 bg-slate-950 p-5 shadow-2xl"
-          >
-            <div className="mb-5 flex items-center justify-between gap-4">
-              <h2 className="text-xl font-semibold text-white">
-                {selectedSchedule ? 'Edit schedule' : 'Create schedule'}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <SectionCard className="w-full max-w-lg p-0 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            
+            <div className="px-6 py-4 border-b border-outline-variant/30 bg-surface-container-low flex items-center justify-between">
+              <h2 className="text-xl font-heading font-bold text-on-surface">
+                {selectedSchedule ? 'Edit Study Block' : 'Create Study Block'}
               </h2>
               <button
                 type="button"
                 onClick={closeModal}
-                className="rounded-md px-2 py-1 text-sm text-slate-400 hover:bg-white/10 hover:text-white"
+                className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-variant rounded-full transition-colors"
               >
-                Close
+                <FiX />
               </button>
             </div>
 
-            <div className="grid gap-4">
-              <label className="grid gap-1.5 text-sm">
-                <span className="text-slate-300">Title</span>
+            <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-5">
+              
+              <div>
+                <label className="block text-sm font-semibold text-on-surface mb-1.5">Block Title <span className="text-error">*</span></label>
                 <input
                   value={form.title}
-                  onChange={(event) => setForm({ ...form, title: event.target.value })}
-                  className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-emerald-400"
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  placeholder="e.g., Biology Review"
+                  className="w-full px-4 py-2.5 bg-surface-container-lowest border border-outline-variant/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-on-surface"
                   required
                 />
-              </label>
+              </div>
 
-              <label className="grid gap-1.5 text-sm">
-                <span className="text-slate-300">Description</span>
+              <div>
+                <label className="block text-sm font-semibold text-on-surface mb-1.5">Description</label>
                 <textarea
                   value={form.description}
-                  onChange={(event) => setForm({ ...form, description: event.target.value })}
-                  className="min-h-[84px] rounded-md border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-emerald-400"
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  placeholder="What will you focus on?"
+                  rows={3}
+                  className="w-full px-4 py-2.5 bg-surface-container-lowest border border-outline-variant/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-on-surface resize-none"
                 />
-              </label>
+              </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="grid gap-1.5 text-sm">
-                  <span className="text-slate-300">Start</span>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-on-surface mb-1.5">Start Time <span className="text-error">*</span></label>
                   <input
                     type="datetime-local"
                     value={form.start_time}
-                    onChange={(event) => setForm({ ...form, start_time: event.target.value })}
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-emerald-400"
+                    onChange={(e) => setForm({ ...form, start_time: e.target.value })}
+                    className="w-full px-4 py-2.5 bg-surface-container-lowest border border-outline-variant/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-on-surface [color-scheme:dark]"
                     required
                   />
-                </label>
-                <label className="grid gap-1.5 text-sm">
-                  <span className="text-slate-300">End</span>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-on-surface mb-1.5">End Time <span className="text-error">*</span></label>
                   <input
                     type="datetime-local"
                     value={form.end_time}
-                    onChange={(event) => setForm({ ...form, end_time: event.target.value })}
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-emerald-400"
+                    onChange={(e) => setForm({ ...form, end_time: e.target.value })}
+                    className="w-full px-4 py-2.5 bg-surface-container-lowest border border-outline-variant/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-on-surface [color-scheme:dark]"
                     required
                   />
-                </label>
+                </div>
               </div>
 
-              <label className="grid gap-1.5 text-sm">
-                <span className="text-slate-300">Linked document</span>
-                <select
-                  value={form.reference_doc_id}
-                  onChange={(event) => setForm({ ...form, reference_doc_id: event.target.value })}
-                  className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-emerald-400"
-                >
-                  <option value="" className="bg-slate-950">
-                    No document
-                  </option>
-                  {completedDocs.map((document) => (
-                    <option key={document.id} value={document.id} className="bg-slate-950">
-                      {document.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="grid gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
-                <label className="flex items-center gap-2 text-sm text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={form.is_recurring}
-                    onChange={(event) =>
-                      setForm({ ...form, is_recurring: event.target.checked })
-                    }
-                  />
-                  Recurring
-                </label>
-                {form.is_recurring && (
+              <div>
+                <label className="block text-sm font-semibold text-on-surface mb-1.5">Link to Document</label>
+                <div className="relative">
                   <select
-                    value={form.recurrence_rule}
-                    onChange={(event) => setForm({ ...form, recurrence_rule: event.target.value })}
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
+                    value={form.reference_doc_id}
+                    onChange={(e) => setForm({ ...form, reference_doc_id: e.target.value })}
+                    className="w-full appearance-none px-4 py-2.5 bg-surface-container-lowest border border-outline-variant/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-on-surface cursor-pointer"
                   >
-                    <option value="" className="bg-slate-950">
-                      Select recurrence
-                    </option>
-                    <option value="DAILY" className="bg-slate-950">
-                      Daily
-                    </option>
-                    <option value="WEEKLY" className="bg-slate-950">
-                      Weekly
-                    </option>
+                    <option value="">No Document</option>
+                    {completedDocs.map((doc) => (
+                      <option key={doc.id} value={doc.id}>
+                        {doc.title}
+                      </option>
+                    ))}
                   </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-on-surface-variant">
+                    ▼
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant/30 flex flex-col gap-3">
+                <label className="flex items-center gap-3 cursor-pointer select-none">
+                  <div className="relative flex items-center justify-center w-5 h-5">
+                    <input
+                      type="checkbox"
+                      checked={form.is_recurring}
+                      onChange={(e) => setForm({ ...form, is_recurring: e.target.checked })}
+                      className="peer appearance-none w-5 h-5 border-2 border-outline-variant rounded bg-surface-container-lowest checked:bg-primary checked:border-primary focus:ring-2 focus:ring-primary/30 transition-colors cursor-pointer"
+                    />
+                    <FiCheckCircle className="absolute text-on-primary w-3.5 h-3.5 opacity-0 peer-checked:opacity-100 pointer-events-none transition-opacity" />
+                  </div>
+                  <span className="text-sm font-medium text-on-surface">Repeat this session</span>
+                </label>
+                
+                {form.is_recurring && (
+                  <div className="relative pl-8 animate-in slide-in-from-top-2 duration-200">
+                    <select
+                      value={form.recurrence_rule}
+                      onChange={(e) => setForm({ ...form, recurrence_rule: e.target.value })}
+                      className="w-full appearance-none px-4 py-2 bg-surface-container-lowest border border-outline-variant/50 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-on-surface cursor-pointer"
+                      required={form.is_recurring}
+                    >
+                      <option value="">Select recurrence frequency</option>
+                      <option value="DAILY">Daily</option>
+                      <option value="WEEKLY">Weekly</option>
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-on-surface-variant">
+                      ▼
+                    </div>
+                  </div>
                 )}
               </div>
-            </div>
 
-            <div className="mt-6 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={closeModal}
-                className="rounded-md border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/10"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saving}
-                className="rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:opacity-60"
-              >
-                {saving ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          </form>
+              <div className="mt-2 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="px-6 py-2.5 rounded-xl font-medium text-sm bg-surface-variant text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface transition-colors"
+                >
+                  Cancel
+                </button>
+                <GradientButton
+                  type="submit"
+                  disabled={saving}
+                >
+                  {saving ? 'Saving...' : 'Save Block'}
+                </GradientButton>
+              </div>
+
+            </form>
+          </SectionCard>
         </div>
       )}
-    </main>
+
+    </AppShell>
   )
 }

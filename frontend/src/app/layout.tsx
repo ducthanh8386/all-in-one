@@ -5,13 +5,24 @@
 import './globals.css'
 import type { Metadata } from 'next'
 import { Providers } from '@/app/providers'
+import { Inter, Hanken_Grotesk } from 'next/font/google'
+
+const inter = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-inter',
+})
+
+const hankenGrotesk = Hanken_Grotesk({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-hanken-grotesk',
+})
 
 export const metadata: Metadata = {
   title: 'Brain-Sync - All-in-one Study Workspace',
   description: 'Manage your study, flashcards, schedule, and compete in real-time games',
 }
-
-import { Header } from '@/components/layout/Header'
 
 export default function RootLayout({
   children,
@@ -19,15 +30,10 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="vi">
-      <body>
+    <html lang="en" className={`${inter.variable} ${hankenGrotesk.variable}`}>
+      <body className="min-h-screen bg-background text-on-background font-sans antialiased flex flex-col">
         <Providers>
-          <div className="min-h-screen bg-slate-50 flex flex-col">
-            <Header />
-            <div className="flex-1">
-              {children}
-            </div>
-          </div>
+          {children}
         </Providers>
       </body>
     </html>
